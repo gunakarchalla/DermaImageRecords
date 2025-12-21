@@ -8,6 +8,7 @@ export type Patient = {
     gender?: Gender;
     phone?: string;
     profilePhotoUri?: string;
+    profilePhotoAssetId?: string | null;
     createdAt: string;
     updatedAt: string;
 };
@@ -17,6 +18,7 @@ export type Consultation = {
     patientId: string;
     remarks: string;
     photoUris: string[];
+    photoAssetIds?: (string | null)[];
     createdAt: string;
     updatedAt: string;
 };
