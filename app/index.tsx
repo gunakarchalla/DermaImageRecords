@@ -37,7 +37,10 @@ export default function HomeScreen() {
       const items = await listPatients();
       setPatients(items);
     } catch (error) {
-      Alert.alert("Load failed", "Could not load patients. Please try again.");
+      Alert.alert(
+        "Load failed",
+        `Could not load patients. Please try again. Error: ${(error as Error).message}`
+      );
     } finally {
       setLoading(false);
     }
@@ -97,7 +100,10 @@ export default function HomeScreen() {
                 await deletePatient(patient.id);
                 await loadPatients();
               } catch (error) {
-                Alert.alert("Delete failed", "Could not delete this patient.");
+                Alert.alert(
+                  "Delete failed",
+                  `Could not delete this patient. Error: ${(error as Error).message}`
+                );
               }
             },
           },

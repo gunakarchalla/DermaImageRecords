@@ -27,10 +27,17 @@ const consultationDir = (patientId: string, consultationId: string) => `${patien
 const consultationFile = (patientId: string, consultationId: string) => `${consultationDir(patientId, consultationId)}/${CONSULTATION_FILE}`;
 
 const readJson = async <T>(path: string): Promise<T | null> => {
+    // Guard against missing files so callers do not hit ENOENT when the file was not yet created.
+    const info = await FileSystem.getInfoAsync(path);
+    if (!info.exists) {
+        return null;
+    }
+
     try {
         const content = await FileSystem.readAsStringAsync(path);
         return JSON.parse(content) as T;
     } catch (error) {
+        console.error(`Failed to read JSON from ${path}:`, error);
         return null;
     }
 };
@@ -42,11 +49,14 @@ const writeJson = async (path: string, data: unknown) => {
 const compressAndSaveImage = async (sourceUri: string, destinationUri: string) => {
     // Resize and compress photos before persisting to reduce storage usage and improve load speed.
 
-    let manipulator = await ImageManipulator.ImageManipulator.manipulate(sourceUri);
-    manipulator.resize({ width: MAX_IMAGE_DIMENSION, height: MAX_IMAGE_DIMENSION });
-    manipulator = ImageManipulator.ImageManipulator.compress(manipulator, IMAGE_QUALITY);
-    const imageRef = await manipulator.renderAsync();
-    const result = await imageRef.saveAsync({ format: ImageManipulator.SaveFormat.JPEG });
+    const context = ImageManipulator.ImageManipulator.manipulate(sourceUri);
+    context.resize({ width: MAX_IMAGE_DIMENSION, height: MAX_IMAGE_DIMENSION });
+
+    const imageRef = await context.renderAsync();
+    const result = await imageRef.saveAsync({
+        compress: IMAGE_QUALITY,
+        format: ImageManipulator.SaveFormat.JPEG,
+    });
 
     await FileSystem.copyAsync({ from: result.uri, to: destinationUri });
     return destinationUri;

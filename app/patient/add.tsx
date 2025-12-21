@@ -41,11 +41,11 @@ export default function AddPatientScreen() {
 
     const result = fromCamera
       ? await ImagePicker.launchCameraAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          mediaTypes: "images" as ImagePicker.MediaType,
           quality: 1,
         })
       : await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          mediaTypes: "images" as ImagePicker.MediaType,
           quality: 1,
         });
 
@@ -76,7 +76,10 @@ export default function AddPatientScreen() {
 
       router.replace(`/patient/${patient.id}`);
     } catch (error) {
-      Alert.alert("Save failed", "Could not save patient. Please try again.");
+      Alert.alert(
+        "Save failed",
+        `Could not save patient. Please try again. Error: ${(error as Error).message}`
+      );
     } finally {
       setSaving(false);
     }

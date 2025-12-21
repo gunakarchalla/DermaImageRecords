@@ -60,7 +60,10 @@ export default function PatientDetailsScreen() {
       }
       setConsultations(consultationsData);
     } catch (error) {
-      Alert.alert("Load failed", "Could not load patient details.");
+      Alert.alert(
+        "Load failed",
+        `Could not load patient details. Error: ${(error as Error).message}`
+      );
     } finally {
       setLoading(false);
     }
@@ -87,11 +90,11 @@ export default function PatientDetailsScreen() {
 
     const result = fromCamera
       ? await ImagePicker.launchCameraAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          mediaTypes: "images" as ImagePicker.MediaType,
           quality: 1,
         })
       : await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          mediaTypes: "images" as ImagePicker.MediaType,
           quality: 1,
         });
 
@@ -122,7 +125,10 @@ export default function PatientDetailsScreen() {
       setPatient(updated);
       setEditing(false);
     } catch (error) {
-      Alert.alert("Save failed", "Could not update patient.");
+      Alert.alert(
+        "Save failed",
+        `Could not update patient. Error: ${(error as Error).message}`
+      );
     }
   };
 
