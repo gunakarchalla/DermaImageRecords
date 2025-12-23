@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { toRenderableImageUriAsync } from "../../../../lib/imageUri";
 import { getConsultation } from "../../../../lib/storage";
 import { Consultation } from "../../../../types/models";
 
@@ -22,6 +23,9 @@ export default function ViewConsultationScreen() {
   }>();
 
   const [consultation, setConsultation] = useState<Consultation | null>(null);
+  const [photoDisplayUris, setPhotoDisplayUris] = useState<
+    Record<string, string | undefined>
+  >({});
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -29,6 +33,24 @@ export default function ViewConsultationScreen() {
     setLoading(true);
     const data = await getConsultation(patientId, consultationId);
     setConsultation(data);
+
+    // Resolve persisted SAF/content URIs to cache file:// URIs for rendering.
+    if (data?.photoUris?.length) {
+      const entries = await Promise.all(
+        data.photoUris.map(async (uri) => {
+          try {
+            const displayUri = await toRenderableImageUriAsync(uri);
+            return [uri, displayUri] as const;
+          } catch {
+            return [uri, undefined] as const;
+          }
+        })
+      );
+      setPhotoDisplayUris(Object.fromEntries(entries));
+    } else {
+      setPhotoDisplayUris({});
+    }
+
     setLoading(false);
   }, [patientId, consultationId]);
 
@@ -104,7 +126,7 @@ export default function ViewConsultationScreen() {
             {consultation.photoUris.map((uri) => (
               <Image
                 key={uri}
-                source={{ uri }}
+                source={{ uri: photoDisplayUris[uri] ?? uri }}
                 className="h-32 w-32 mr-3 mb-3 rounded-xl"
                 contentFit="cover"
               />

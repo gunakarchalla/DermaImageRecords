@@ -1,4 +1,5 @@
 import { Stack } from "expo-router";
+import "../lib/nativewindInterop";
 import "./global.css";
 
 export default function RootLayout() {

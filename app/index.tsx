@@ -1,7 +1,7 @@
 import { Feather, MaterialIcons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { toRenderableImageUriAsync } from "../lib/imageUri";
 import { deletePatient, listPatients } from "../lib/storage";
 import { Patient } from "../types/models";
 
@@ -27,15 +28,43 @@ const DEFAULT_SORT: { field: SortField; direction: SortDirection } = {
 export default function HomeScreen() {
   const router = useRouter();
   const [patients, setPatients] = useState<Patient[]>([]);
+  const [profilePhotoUris, setProfilePhotoUris] = useState<
+    Record<string, string | undefined>
+  >({});
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState(DEFAULT_SORT);
 
+  const loadSeq = useRef(0);
+
   const loadPatients = useCallback(async () => {
+    loadSeq.current += 1;
+    const seq = loadSeq.current;
     setLoading(true);
     try {
       const items = await listPatients();
       setPatients(items);
+
+      // Resolve persisted SAF/content URIs to render-safe cache file:// URIs.
+      // This is intentionally done after setting the list so the UI stays responsive.
+      void (async () => {
+        const entries = await Promise.all(
+          items.map(async (patient) => {
+            try {
+              const renderUri = await toRenderableImageUriAsync(
+                patient.profilePhotoUri
+              );
+              return [patient.id, renderUri] as const;
+            } catch {
+              return [patient.id, undefined] as const;
+            }
+          })
+        );
+
+        // Avoid applying stale results when multiple loads happen quickly.
+        if (seq !== loadSeq.current) return;
+        setProfilePhotoUris(Object.fromEntries(entries));
+      })();
     } catch (error) {
       Alert.alert(
         "Load failed",
@@ -128,9 +157,9 @@ export default function HomeScreen() {
       onPress={() => router.push(`/patient/${item.id}`)}
       className="flex-row items-center bg-white mb-3 rounded-xl p-4 shadow-sm"
     >
-      {item.profilePhotoUri ? (
+      {item.profilePhotoUri && profilePhotoUris[item.id] ? (
         <Image
-          source={{ uri: item.profilePhotoUri }}
+          source={{ uri: profilePhotoUris[item.id] }}
           className="h-14 w-14 rounded-full mr-4"
           contentFit="cover"
         />

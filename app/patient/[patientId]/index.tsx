@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { toRenderableImageUriAsync } from "../../../lib/imageUri";
 import {
   getPatient,
   listConsultations,
@@ -31,6 +32,9 @@ export default function PatientDetailsScreen() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [profilePhotoUri, setProfilePhotoUri] = useState<string | undefined>();
+  const [profilePhotoDisplayUri, setProfilePhotoDisplayUri] = useState<
+    string | undefined
+  >();
   const [form, setForm] = useState({
     name: "",
     emrNumber: "",
@@ -50,6 +54,17 @@ export default function PatientDetailsScreen() {
       if (patientData) {
         setPatient(patientData);
         setProfilePhotoUri(patientData.profilePhotoUri);
+
+        // Resolve stored SAF/content URIs to a render-safe cache URI.
+        try {
+          const displayUri = await toRenderableImageUriAsync(
+            patientData.profilePhotoUri
+          );
+          setProfilePhotoDisplayUri(displayUri);
+        } catch {
+          setProfilePhotoDisplayUri(undefined);
+        }
+
         setForm({
           name: patientData.name,
           emrNumber: patientData.emrNumber ?? "",
@@ -99,7 +114,16 @@ export default function PatientDetailsScreen() {
         });
 
     if (!result.canceled && result.assets?.length) {
-      setProfilePhotoUri(result.assets[0].uri);
+      const pickedUri = result.assets[0].uri;
+      setProfilePhotoUri(pickedUri);
+
+      // For previews, normalize any `content://` URIs.
+      try {
+        const displayUri = await toRenderableImageUriAsync(pickedUri);
+        setProfilePhotoDisplayUri(displayUri);
+      } catch {
+        setProfilePhotoDisplayUri(pickedUri);
+      }
     }
   };
 
@@ -180,9 +204,9 @@ export default function PatientDetailsScreen() {
       >
         <View className="bg-white rounded-2xl p-4 shadow-sm mb-4">
           <View className="flex-row items-center mb-4">
-            {profilePhotoUri ? (
+            {profilePhotoDisplayUri ? (
               <Image
-                source={{ uri: profilePhotoUri }}
+                source={{ uri: profilePhotoDisplayUri }}
                 className="h-20 w-20 rounded-full"
                 contentFit="cover"
               />

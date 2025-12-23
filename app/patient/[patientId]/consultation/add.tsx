@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { toRenderableImageUriAsync } from "../../../../lib/imageUri";
 import { getConsultation, saveConsultation } from "../../../../lib/storage";
 
 export default function AddConsultationScreen() {
@@ -24,6 +25,9 @@ export default function AddConsultationScreen() {
 
   const [remarks, setRemarks] = useState("");
   const [photos, setPhotos] = useState<string[]>([]);
+  const [photoPreviewUris, setPhotoPreviewUris] = useState<
+    Record<string, string | undefined>
+  >({});
   const [loading, setLoading] = useState(false);
 
   const loadExisting = useCallback(async () => {
@@ -41,6 +45,30 @@ export default function AddConsultationScreen() {
   useEffect(() => {
     loadExisting();
   }, [loadExisting]);
+
+  useEffect(() => {
+    // Convert any non-renderable URIs (e.g., SAF/content://) to cache file:// URIs for previews.
+    // Keep `photos` unchanged because it is the persisted source-of-truth.
+    let cancelled = false;
+    void (async () => {
+      const entries = await Promise.all(
+        photos.map(async (uri) => {
+          try {
+            const previewUri = await toRenderableImageUriAsync(uri);
+            return [uri, previewUri] as const;
+          } catch {
+            return [uri, undefined] as const;
+          }
+        })
+      );
+      if (cancelled) return;
+      setPhotoPreviewUris(Object.fromEntries(entries));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [photos]);
 
   const addPhoto = async (fromCamera: boolean) => {
     const permission = fromCamera
@@ -85,7 +113,7 @@ export default function AddConsultationScreen() {
         photoUris: photos,
       });
       router.back();
-    } catch (error) {
+    } catch {
       Alert.alert("Save failed", "Could not save consultation.");
     } finally {
       setLoading(false);
@@ -147,7 +175,7 @@ export default function AddConsultationScreen() {
             {photos.map((uri) => (
               <View key={uri} className="mr-3 mb-3 relative">
                 <Image
-                  source={{ uri }}
+                  source={{ uri: photoPreviewUris[uri] ?? uri }}
                   className="h-24 w-24 rounded-lg"
                   contentFit="cover"
                 />
