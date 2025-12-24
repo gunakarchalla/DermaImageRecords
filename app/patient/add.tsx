@@ -13,8 +13,8 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { toRenderableImageUriAsync } from "../../lib/imageUri";
-import { savePatient } from "../../lib/storage";
+import { toRenderableImageUriAsync } from "../../services/imageUri";
+import { savePatient } from "../../services/storage/storage";
 import { Gender } from "../../types/models";
 
 export default function AddPatientScreen() {

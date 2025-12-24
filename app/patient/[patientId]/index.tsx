@@ -2,26 +2,25 @@ import { Feather } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   Pressable,
-  ScrollView,
   Text,
   TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { toRenderableImageUriAsync } from "../../../lib/imageUri";
-import {
-  getPatient,
-  listConsultations,
-  savePatient,
-} from "../../../lib/storage";
+import { FlashList } from "@shopify/flash-list";
+
+import { toRenderableImageUriAsync } from "../../../services/imageUri";
+import { consultationIndexService } from "../../../services/indexing/consultationIndexService";
+import { getPatient, savePatient } from "../../../services/storage/storage";
 import { Consultation, Gender, Patient } from "../../../types/models";
+
+const CONSULTATIONS_PAGE_SIZE = 25;
 
 export default function PatientDetailsScreen() {
   const router = useRouter();
@@ -30,11 +29,17 @@ export default function PatientDetailsScreen() {
   const [patient, setPatient] = useState<Patient | null>(null);
   const [consultations, setConsultations] = useState<Consultation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [editing, setEditing] = useState(false);
   const [profilePhotoUri, setProfilePhotoUri] = useState<string | undefined>();
   const [profilePhotoDisplayUri, setProfilePhotoDisplayUri] = useState<
     string | undefined
   >();
+
+  const cursorRef = useRef<{ updatedAt: string; id: string } | undefined>(
+    undefined
+  );
   const [form, setForm] = useState({
     name: "",
     emrNumber: "",
@@ -47,10 +52,7 @@ export default function PatientDetailsScreen() {
     if (!patientId) return;
     setLoading(true);
     try {
-      const [patientData, consultationsData] = await Promise.all([
-        getPatient(patientId as string),
-        listConsultations(patientId as string),
-      ]);
+      const patientData = await getPatient(patientId as string);
       if (patientData) {
         setPatient(patientData);
         setProfilePhotoUri(patientData.profilePhotoUri);
@@ -73,7 +75,19 @@ export default function PatientDetailsScreen() {
           phone: patientData.phone ?? "",
         });
       }
-      setConsultations(consultationsData);
+
+      // Load first page of consultations from the SQLite index.
+      if (patientId) {
+        cursorRef.current = undefined;
+        const { items, nextCursor } =
+          await consultationIndexService.queryConsultationsPageAsync({
+            patientId: patientId as string,
+            limit: CONSULTATIONS_PAGE_SIZE,
+          });
+        setConsultations(items);
+        cursorRef.current = nextCursor;
+        setHasMore(Boolean(nextCursor));
+      }
     } catch (error) {
       Alert.alert(
         "Load failed",
@@ -83,6 +97,29 @@ export default function PatientDetailsScreen() {
       setLoading(false);
     }
   }, [patientId]);
+
+  const loadMoreConsultations = useCallback(async () => {
+    if (!patientId || loading || loadingMore || !hasMore) return;
+    const cursor = cursorRef.current;
+    if (!cursor) return;
+
+    setLoadingMore(true);
+    try {
+      const { items, nextCursor } =
+        await consultationIndexService.queryConsultationsPageAsync({
+          patientId: patientId as string,
+          limit: CONSULTATIONS_PAGE_SIZE,
+          cursor,
+        });
+      setConsultations((prev) => [...prev, ...items]);
+      cursorRef.current = nextCursor;
+      setHasMore(Boolean(nextCursor));
+    } catch {
+      // Best-effort paging.
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [hasMore, loading, loadingMore, patientId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -148,6 +185,16 @@ export default function PatientDetailsScreen() {
       });
       setPatient(updated);
       setEditing(false);
+
+      // Persisted image URI may change (SAF content URI). Refresh preview.
+      try {
+        const displayUri = await toRenderableImageUriAsync(
+          updated.profilePhotoUri
+        );
+        setProfilePhotoDisplayUri(displayUri);
+      } catch {
+        setProfilePhotoDisplayUri(undefined);
+      }
     } catch (error) {
       Alert.alert(
         "Save failed",
@@ -196,203 +243,209 @@ export default function PatientDetailsScreen() {
     );
   }
 
-  return (
-    <SafeAreaView className="flex-1 bg-slate-50">
-      <ScrollView
-        className="flex-1"
-        contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
-      >
-        <View className="bg-white rounded-2xl p-4 shadow-sm mb-4">
-          <View className="flex-row items-center mb-4">
-            {profilePhotoDisplayUri ? (
-              <Image
-                source={{ uri: profilePhotoDisplayUri }}
-                className="h-20 w-20 rounded-full"
-                contentFit="cover"
-              />
-            ) : (
-              <View className="h-20 w-20 rounded-full bg-slate-200 items-center justify-center">
-                <Feather name="user" size={32} color="#475569" />
-              </View>
-            )}
-            <View className="ml-4 flex-1">
-              {editing ? (
-                <TextInput
-                  value={form.name}
-                  onChangeText={(text) =>
-                    setForm((prev) => ({ ...prev, name: text }))
-                  }
-                  className="text-xl font-bold text-slate-900"
-                  placeholder="Patient name"
-                />
-              ) : (
-                <Text className="text-xl font-bold text-slate-900">
-                  {patient.name}
-                </Text>
-              )}
-              <Text className="text-sm text-slate-500">
-                Last updated {new Date(patient.updatedAt).toLocaleString()}
-              </Text>
-            </View>
-            <Pressable
-              onPress={() => setEditing((prev) => !prev)}
-              className="p-2"
-              accessibilityLabel="Edit patient"
-            >
-              <Feather name="edit-2" size={20} color="#0f172a" />
-            </Pressable>
-          </View>
-
-          {editing ? (
-            <View>
-              {[
-                {
-                  label: "EMR Number",
-                  value: form.emrNumber,
-                  key: "emrNumber",
-                },
-                {
-                  label: "Age",
-                  value: form.age,
-                  key: "age",
-                  keyboardType: "number-pad" as const,
-                },
-                {
-                  label: "Phone",
-                  value: form.phone,
-                  key: "phone",
-                  keyboardType: "phone-pad" as const,
-                },
-              ].map((field) => (
-                <View key={field.key} className="mb-3">
-                  <Text className="text-sm text-slate-600 mb-1">
-                    {field.label}
-                  </Text>
-                  <TextInput
-                    value={field.value}
-                    onChangeText={(text) =>
-                      setForm((prev) => ({ ...prev, [field.key]: text }))
-                    }
-                    placeholder="Optional"
-                    placeholderTextColor="#94a3b8"
-                    className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2"
-                    keyboardType={(field as any).keyboardType ?? "default"}
-                  />
-                </View>
-              ))}
-
-              <View className="mb-4">
-                <Text className="text-sm text-slate-600 mb-2">Gender</Text>
-                <View className="flex-row flex-wrap">
-                  {(
-                    [
-                      { label: "Unspecified", value: "unspecified" },
-                      { label: "Male", value: "male" },
-                      { label: "Female", value: "female" },
-                      { label: "Other", value: "other" },
-                    ] as { label: string; value: Gender }[]
-                  ).map((option) => (
-                    <Pressable
-                      key={option.value}
-                      onPress={() =>
-                        setForm((prev) => ({ ...prev, gender: option.value }))
-                      }
-                      className={`px-4 py-2 mr-2 mb-2 rounded-full border ${
-                        form.gender === option.value
-                          ? "bg-slate-900 border-slate-900"
-                          : "border-slate-200"
-                      }`}
-                    >
-                      <Text
-                        className={`text-sm font-semibold ${
-                          form.gender === option.value
-                            ? "text-white"
-                            : "text-slate-800"
-                        }`}
-                      >
-                        {option.label}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-
-              <View className="flex-row mb-4">
-                <Pressable
-                  className="bg-slate-900 px-3 py-2 rounded-lg mr-3"
-                  onPress={() => requestPhoto(false)}
-                >
-                  <Text className="text-white font-semibold">Upload photo</Text>
-                </Pressable>
-                <Pressable
-                  className="border border-slate-300 px-3 py-2 rounded-lg"
-                  onPress={() => requestPhoto(true)}
-                >
-                  <Text className="text-slate-800 font-semibold">Camera</Text>
-                </Pressable>
-              </View>
-
-              <Pressable
-                className="bg-slate-900 rounded-xl py-3 items-center"
-                onPress={handleSave}
-              >
-                <Text className="text-white font-semibold">Save</Text>
-              </Pressable>
-            </View>
+  const header = (
+    <View>
+      <View className="bg-white rounded-2xl p-4 shadow-sm mb-4">
+        <View className="flex-row items-center mb-4">
+          {profilePhotoDisplayUri ? (
+            <Image
+              source={{ uri: profilePhotoDisplayUri }}
+              className="h-20 w-20 rounded-full"
+              contentFit="cover"
+            />
           ) : (
-            <View>
-              {patient.emrNumber ? (
-                <Text className="text-base text-slate-700">
-                  EMR: {patient.emrNumber}
-                </Text>
-              ) : null}
-              {patient.age ? (
-                <Text className="text-base text-slate-700">
-                  Age: {patient.age}
-                </Text>
-              ) : null}
-              {patient.gender ? (
-                <Text className="text-base text-slate-700">
-                  Gender: {patient.gender}
-                </Text>
-              ) : null}
-              {patient.phone ? (
-                <Text className="text-base text-slate-700">
-                  Phone: {patient.phone}
-                </Text>
-              ) : null}
+            <View className="h-20 w-20 rounded-full bg-slate-200 items-center justify-center">
+              <Feather name="user" size={32} color="#475569" />
             </View>
           )}
-        </View>
-
-        <View className="flex-row items-center justify-between mb-2">
-          <Text className="text-lg font-semibold text-slate-900">
-            Consultations
-          </Text>
+          <View className="ml-4 flex-1">
+            {editing ? (
+              <TextInput
+                value={form.name}
+                onChangeText={(text) =>
+                  setForm((prev) => ({ ...prev, name: text }))
+                }
+                className="text-xl font-bold text-slate-900"
+                placeholder="Patient name"
+              />
+            ) : (
+              <Text className="text-xl font-bold text-slate-900">
+                {patient.name}
+              </Text>
+            )}
+            <Text className="text-sm text-slate-500">
+              Last updated {new Date(patient.updatedAt).toLocaleString()}
+            </Text>
+          </View>
           <Pressable
-            onPress={() =>
-              router.push(`/patient/${patientId}/consultation/add`)
-            }
-            className="bg-slate-900 px-3 py-2 rounded-lg flex-row items-center"
+            onPress={() => setEditing((prev) => !prev)}
+            className="p-2"
+            accessibilityLabel="Edit patient"
           >
-            <Feather name="plus" size={16} color="white" />
-            <Text className="text-white font-semibold ml-1">Add</Text>
+            <Feather name="edit-2" size={20} color="#0f172a" />
           </Pressable>
         </View>
 
-        {consultations.length === 0 ? (
+        {editing ? (
+          <View>
+            {[
+              {
+                label: "EMR Number",
+                value: form.emrNumber,
+                key: "emrNumber",
+              },
+              {
+                label: "Age",
+                value: form.age,
+                key: "age",
+                keyboardType: "number-pad" as const,
+              },
+              {
+                label: "Phone",
+                value: form.phone,
+                key: "phone",
+                keyboardType: "phone-pad" as const,
+              },
+            ].map((field) => (
+              <View key={field.key} className="mb-3">
+                <Text className="text-sm text-slate-600 mb-1">
+                  {field.label}
+                </Text>
+                <TextInput
+                  value={field.value}
+                  onChangeText={(text) =>
+                    setForm((prev) => ({ ...prev, [field.key]: text }))
+                  }
+                  placeholder="Optional"
+                  placeholderTextColor="#94a3b8"
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2"
+                  keyboardType={(field as any).keyboardType ?? "default"}
+                />
+              </View>
+            ))}
+
+            <View className="mb-4">
+              <Text className="text-sm text-slate-600 mb-2">Gender</Text>
+              <View className="flex-row flex-wrap">
+                {(
+                  [
+                    { label: "Unspecified", value: "unspecified" },
+                    { label: "Male", value: "male" },
+                    { label: "Female", value: "female" },
+                    { label: "Other", value: "other" },
+                  ] as { label: string; value: Gender }[]
+                ).map((option) => (
+                  <Pressable
+                    key={option.value}
+                    onPress={() =>
+                      setForm((prev) => ({ ...prev, gender: option.value }))
+                    }
+                    className={`px-4 py-2 mr-2 mb-2 rounded-full border ${
+                      form.gender === option.value
+                        ? "bg-slate-900 border-slate-900"
+                        : "border-slate-200"
+                    }`}
+                  >
+                    <Text
+                      className={`text-sm font-semibold ${
+                        form.gender === option.value
+                          ? "text-white"
+                          : "text-slate-800"
+                      }`}
+                    >
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+
+            <View className="flex-row mb-4">
+              <Pressable
+                className="bg-slate-900 px-3 py-2 rounded-lg mr-3"
+                onPress={() => requestPhoto(false)}
+              >
+                <Text className="text-white font-semibold">Upload photo</Text>
+              </Pressable>
+              <Pressable
+                className="border border-slate-300 px-3 py-2 rounded-lg"
+                onPress={() => requestPhoto(true)}
+              >
+                <Text className="text-slate-800 font-semibold">Camera</Text>
+              </Pressable>
+            </View>
+
+            <Pressable
+              className="bg-slate-900 rounded-xl py-3 items-center"
+              onPress={handleSave}
+            >
+              <Text className="text-white font-semibold">Save</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View>
+            {patient.emrNumber ? (
+              <Text className="text-base text-slate-700">
+                EMR: {patient.emrNumber}
+              </Text>
+            ) : null}
+            {patient.age ? (
+              <Text className="text-base text-slate-700">
+                Age: {patient.age}
+              </Text>
+            ) : null}
+            {patient.gender ? (
+              <Text className="text-base text-slate-700">
+                Gender: {patient.gender}
+              </Text>
+            ) : null}
+            {patient.phone ? (
+              <Text className="text-base text-slate-700">
+                Phone: {patient.phone}
+              </Text>
+            ) : null}
+          </View>
+        )}
+      </View>
+
+      <View className="flex-row items-center justify-between mb-2">
+        <Text className="text-lg font-semibold text-slate-900">
+          Consultations
+        </Text>
+        <Pressable
+          onPress={() => router.push(`/patient/${patientId}/consultation/add`)}
+          className="bg-slate-900 px-3 py-2 rounded-lg flex-row items-center"
+        >
+          <Feather name="plus" size={16} color="white" />
+          <Text className="text-white font-semibold ml-1">Add</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+
+  return (
+    <SafeAreaView className="flex-1 bg-slate-50">
+      <FlashList
+        data={consultations}
+        keyExtractor={(item) => item.id}
+        renderItem={renderConsultation}
+        contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
+        ListHeaderComponent={header}
+        ListEmptyComponent={
           <View className="bg-white rounded-xl p-4 shadow-sm">
             <Text className="text-slate-600">No consultations yet.</Text>
           </View>
-        ) : (
-          <FlatList
-            data={consultations}
-            keyExtractor={(item) => item.id}
-            renderItem={renderConsultation}
-            scrollEnabled={false}
-          />
-        )}
-      </ScrollView>
+        }
+        onEndReached={loadMoreConsultations}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={
+          loadingMore ? (
+            <View className="py-6">
+              <ActivityIndicator size="small" color="#0f172a" />
+            </View>
+          ) : null
+        }
+      />
     </SafeAreaView>
   );
 }

@@ -1,11 +1,9 @@
 import { Feather, MaterialIcons } from "@expo/vector-icons";
-import { Image } from "expo-image";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   Pressable,
   Text,
   TextInput,
@@ -13,9 +11,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { toRenderableImageUriAsync } from "../lib/imageUri";
-import { deletePatient, listPatients } from "../lib/storage";
-import { Patient } from "../types/models";
+import { FlashList } from "@shopify/flash-list";
+
+import { PatientListItem } from "../components/PatientListItem";
+import { patientIndexService } from "../services/indexing/patientIndexService";
+import { deletePatient } from "../services/storage/storage";
+import type { Patient } from "../types/models";
 
 type SortField = "updatedAt" | "createdAt" | "name";
 type SortDirection = "asc" | "desc";
@@ -25,46 +26,47 @@ const DEFAULT_SORT: { field: SortField; direction: SortDirection } = {
   direction: "desc",
 };
 
+const PAGE_SIZE = 50;
+
 export default function HomeScreen() {
   const router = useRouter();
   const [patients, setPatients] = useState<Patient[]>([]);
-  const [profilePhotoUris, setProfilePhotoUris] = useState<
-    Record<string, string | undefined>
-  >({});
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sort, setSort] = useState(DEFAULT_SORT);
 
+  const cursorRef = useRef<{ sortValue: string; id: string } | undefined>(
+    undefined
+  );
   const loadSeq = useRef(0);
 
-  const loadPatients = useCallback(async () => {
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const loadFirstPage = useCallback(async () => {
     loadSeq.current += 1;
     const seq = loadSeq.current;
     setLoading(true);
     try {
-      const items = await listPatients();
+      cursorRef.current = undefined;
+      const { items, nextCursor } =
+        await patientIndexService.queryPatientsPageAsync({
+          limit: PAGE_SIZE,
+          search: debouncedSearch,
+          sortField: sort.field,
+          sortDirection: sort.direction,
+        });
+
+      if (seq !== loadSeq.current) return;
+
       setPatients(items);
-
-      // Resolve persisted SAF/content URIs to render-safe cache file:// URIs.
-      // This is intentionally done after setting the list so the UI stays responsive.
-      void (async () => {
-        const entries = await Promise.all(
-          items.map(async (patient) => {
-            try {
-              const renderUri = await toRenderableImageUriAsync(
-                patient.profilePhotoUri
-              );
-              return [patient.id, renderUri] as const;
-            } catch {
-              return [patient.id, undefined] as const;
-            }
-          })
-        );
-
-        // Avoid applying stale results when multiple loads happen quickly.
-        if (seq !== loadSeq.current) return;
-        setProfilePhotoUris(Object.fromEntries(entries));
-      })();
+      cursorRef.current = nextCursor;
+      setHasMore(Boolean(nextCursor));
     } catch (error) {
       Alert.alert(
         "Load failed",
@@ -73,46 +75,50 @@ export default function HomeScreen() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [debouncedSearch, sort.field, sort.direction]);
+
+  const loadMore = useCallback(async () => {
+    if (loading || loadingMore || !hasMore) return;
+    const cursor = cursorRef.current;
+    if (!cursor) return;
+
+    loadSeq.current += 1;
+    const seq = loadSeq.current;
+    setLoadingMore(true);
+    try {
+      const { items, nextCursor } =
+        await patientIndexService.queryPatientsPageAsync({
+          limit: PAGE_SIZE,
+          search: debouncedSearch,
+          sortField: sort.field,
+          sortDirection: sort.direction,
+          cursor,
+        });
+
+      if (seq !== loadSeq.current) return;
+
+      setPatients((prev) => [...prev, ...items]);
+      cursorRef.current = nextCursor;
+      setHasMore(Boolean(nextCursor));
+    } catch {
+      // Best-effort paging; ignore transient errors.
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [
+    debouncedSearch,
+    hasMore,
+    loading,
+    loadingMore,
+    sort.field,
+    sort.direction,
+  ]);
 
   useFocusEffect(
     useCallback(() => {
-      loadPatients();
-    }, [loadPatients])
+      loadFirstPage();
+    }, [loadFirstPage])
   );
-
-  const filteredPatients = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    const filtered = query
-      ? patients.filter(
-          (p) =>
-            p.name.toLowerCase().includes(query) ||
-            (p.emrNumber ?? "").toLowerCase().includes(query)
-        )
-      : patients;
-
-    const sorted = [...filtered].sort((a, b) => {
-      let aVal: string = "";
-      let bVal: string = "";
-
-      if (sort.field === "name") {
-        aVal = a.name.toLowerCase();
-        bVal = b.name.toLowerCase();
-      } else if (sort.field === "createdAt") {
-        aVal = a.createdAt;
-        bVal = b.createdAt;
-      } else {
-        aVal = a.updatedAt;
-        bVal = b.updatedAt;
-      }
-
-      if (aVal < bVal) return sort.direction === "asc" ? -1 : 1;
-      if (aVal > bVal) return sort.direction === "asc" ? 1 : -1;
-      return 0;
-    });
-
-    return sorted;
-  }, [patients, search, sort]);
 
   const confirmDelete = useCallback(
     (patient: Patient) => {
@@ -127,7 +133,7 @@ export default function HomeScreen() {
             onPress: async () => {
               try {
                 await deletePatient(patient.id);
-                await loadPatients();
+                await loadFirstPage();
               } catch (error) {
                 Alert.alert(
                   "Delete failed",
@@ -139,7 +145,7 @@ export default function HomeScreen() {
         ]
       );
     },
-    [loadPatients]
+    [loadFirstPage]
   );
 
   const toggleDirection = () => {
@@ -152,43 +158,15 @@ export default function HomeScreen() {
   const setField = (field: SortField) =>
     setSort((prev) => ({ ...prev, field }));
 
-  const renderPatient = ({ item }: { item: Patient }) => (
-    <Pressable
-      onPress={() => router.push(`/patient/${item.id}`)}
-      className="flex-row items-center bg-white mb-3 rounded-xl p-4 shadow-sm"
-    >
-      {item.profilePhotoUri && profilePhotoUris[item.id] ? (
-        <Image
-          source={{ uri: profilePhotoUris[item.id] }}
-          className="h-14 w-14 rounded-full mr-4"
-          contentFit="cover"
-        />
-      ) : (
-        <View className="h-14 w-14 rounded-full mr-4 bg-slate-200 items-center justify-center">
-          <Feather name="user" size={26} color="#475569" />
-        </View>
-      )}
-
-      <View className="flex-1">
-        <Text className="text-lg font-semibold text-slate-900">
-          {item.name}
-        </Text>
-        {item.emrNumber ? (
-          <Text className="text-sm text-slate-500">EMR: {item.emrNumber}</Text>
-        ) : null}
-        <Text className="text-xs text-slate-400 mt-1">
-          Updated {new Date(item.updatedAt).toLocaleString()}
-        </Text>
-      </View>
-
-      <Pressable
-        accessibilityLabel="Delete patient"
-        onPress={() => confirmDelete(item)}
-        className="p-2"
-      >
-        <Feather name="trash-2" size={20} color="#e11d48" />
-      </Pressable>
-    </Pressable>
+  const renderPatient = useCallback(
+    ({ item }: { item: Patient }) => (
+      <PatientListItem
+        patient={item}
+        onPress={(p) => router.push(`/patient/${p.id}`)}
+        onDelete={confirmDelete}
+      />
+    ),
+    [confirmDelete, router]
   );
 
   return (
@@ -259,11 +237,13 @@ export default function HomeScreen() {
           <ActivityIndicator size="large" color="#0f172a" />
         </View>
       ) : (
-        <FlatList
-          data={filteredPatients}
+        <FlashList
+          data={patients}
           keyExtractor={(item) => item.id}
           renderItem={renderPatient}
           contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
+          onEndReached={loadMore}
+          onEndReachedThreshold={0.5}
           ListEmptyComponent={
             <View className="items-center mt-20">
               <Feather name="users" size={32} color="#94a3b8" />
@@ -271,6 +251,13 @@ export default function HomeScreen() {
                 No patients yet. Add one to get started.
               </Text>
             </View>
+          }
+          ListFooterComponent={
+            loadingMore ? (
+              <View className="py-6">
+                <ActivityIndicator size="small" color="#0f172a" />
+              </View>
+            ) : null
           }
         />
       )}

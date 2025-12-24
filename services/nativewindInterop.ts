@@ -6,7 +6,7 @@ import { cssInterop } from "nativewind";
  * `expo-image` is a third-party component, so without `cssInterop` the `className`
  * prop will be ignored at runtime, leading to images rendering with no size.
  *
- * Call this module once at app startup (see `app/_layout.tsx`).
+ * Call this module once at app startup (see app/_layout.tsx).
  */
 cssInterop(ExpoImage, {
     className: "style",

@@ -1,12 +1,14 @@
 import { Directory, File, Paths } from "expo-file-system";
 
+import { STORAGE } from "../constants/storage";
+
 /**
  * Some providers (notably SAF `content://` document URIs) don't reliably render in all
  * image components on Android. We keep SAF/content URIs as the persisted source-of-truth,
  * but convert them to a local cache `file://` URI for rendering.
  */
 
-const IMAGE_CACHE_DIR = new Directory(Paths.cache, "DermaImageRecordsImageCache");
+const IMAGE_CACHE_DIR = new Directory(Paths.cache, STORAGE.imageCacheFolderName);
 
 const ensureCacheDir = async () => {
     // Create directory tree if missing.

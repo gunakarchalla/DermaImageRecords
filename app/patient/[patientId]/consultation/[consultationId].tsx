@@ -11,8 +11,8 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { toRenderableImageUriAsync } from "../../../../lib/imageUri";
-import { getConsultation } from "../../../../lib/storage";
+import { toRenderableImageUriAsync } from "../../../../services/imageUri";
+import { getConsultation } from "../../../../services/storage/storage";
 import { Consultation } from "../../../../types/models";
 
 export default function ViewConsultationScreen() {

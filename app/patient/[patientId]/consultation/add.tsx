@@ -13,8 +13,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { toRenderableImageUriAsync } from "../../../../lib/imageUri";
-import { getConsultation, saveConsultation } from "../../../../lib/storage";
+import { toRenderableImageUriAsync } from "../../../../services/imageUri";
+import {
+  getConsultation,
+  saveConsultation,
+} from "../../../../services/storage";
 
 export default function AddConsultationScreen() {
   const router = useRouter();
