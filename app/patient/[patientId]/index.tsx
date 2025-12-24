@@ -17,7 +17,11 @@ import { FlashList } from "@shopify/flash-list";
 
 import { toRenderableImageUriAsync } from "../../../services/imageUri";
 import { consultationIndexService } from "../../../services/indexing/consultationIndexService";
-import { getPatient, savePatient } from "../../../services/storage/storage";
+import {
+  deleteConsultation,
+  getPatient,
+  savePatient,
+} from "../../../services/storage/storage";
 import { ConsultationIndexRow, Gender, Patient } from "../../../types/models";
 
 const CONSULTATIONS_PAGE_SIZE = 25;
@@ -123,6 +127,50 @@ export default function PatientDetailsScreen() {
     }
   }, [hasMore, loading, loadingMore, patientId]);
 
+  const reloadConsultationsFirstPage = useCallback(async () => {
+    if (!patientId) return;
+
+    cursorRef.current = undefined;
+    const { items, nextCursor } =
+      await consultationIndexService.queryConsultationsPageAsync({
+        patientId: patientId as string,
+        limit: CONSULTATIONS_PAGE_SIZE,
+      });
+    setConsultations(items);
+    cursorRef.current = nextCursor;
+    setHasMore(Boolean(nextCursor));
+  }, [patientId]);
+
+  const confirmDeleteConsultation = useCallback(
+    (consultation: ConsultationIndexRow) => {
+      if (!patientId) return;
+
+      Alert.alert(
+        "Delete consultation",
+        "Delete this consultation? This cannot be undone.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: async () => {
+              try {
+                await deleteConsultation(patientId as string, consultation.id);
+                await reloadConsultationsFirstPage();
+              } catch (error) {
+                Alert.alert(
+                  "Delete failed",
+                  `Could not delete this consultation. Error: ${(error as Error).message}`
+                );
+              }
+            },
+          },
+        ]
+      );
+    },
+    [patientId, reloadConsultationsFirstPage]
+  );
+
   useFocusEffect(
     useCallback(() => {
       loadData();
@@ -216,9 +264,18 @@ export default function PatientDetailsScreen() {
         <Text className="text-base font-semibold text-slate-900">
           Consultation
         </Text>
-        <Text className="text-xs text-slate-500">
-          {new Date(item.updatedAt).toLocaleDateString()}
-        </Text>
+        <View className="flex-row items-center">
+          <Text className="text-xs text-slate-500">
+            {new Date(item.updatedAt).toLocaleDateString()}
+          </Text>
+          <Pressable
+            accessibilityLabel="Delete consultation"
+            onPress={() => confirmDeleteConsultation(item)}
+            className="ml-3 p-2"
+          >
+            <Feather name="trash-2" size={18} color="#e11d48" />
+          </Pressable>
+        </View>
       </View>
       <Text className="text-sm text-slate-700" numberOfLines={2}>
         {item.remarks || "No remarks"}

@@ -118,14 +118,23 @@ export const getConsultation = async (patientId: string, consultationId: string)
 export const deleteConsultation = async (patientId: string, consultationId: string) => {
     await initStorage();
     const dir = getExistingConsultationDir(patientId, consultationId);
-    if (!dir) return;
+    if (dir) {
+        // Best-effort validation read (source-of-truth is directory presence).
+        void (await readJsonFromDir<Consultation>(dir, STORAGE.consultationFileName));
+        await safeDeleteDir(dir);
+    }
 
-    void (await readJsonFromDir<Consultation>(dir, STORAGE.consultationFileName));
-
-    await safeDeleteDir(dir);
-
-    // Keep index in sync.
+    // Always keep SQLite index in sync, even when the folder is already gone.
     await consultationIndexService.deleteConsultationAsync(patientId, consultationId);
+
+    // Deleting a consultation is a patient record mutation; keep patient metadata/index in sync.
+    const patientDir = getExistingPatientDir(patientId);
+    const patient = patientDir ? await readJsonFromDir<Patient>(patientDir, STORAGE.patientFileName) : null;
+    if (patient && patientDir) {
+        patient.updatedAt = new Date().toISOString();
+        await writeJsonToDir(patientDir, STORAGE.patientFileName, patient);
+        await patientIndexService.upsertPatientAsync(patient);
+    }
 };
 
 export const saveConsultation = async (
