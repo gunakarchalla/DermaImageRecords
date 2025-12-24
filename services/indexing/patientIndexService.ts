@@ -5,7 +5,7 @@ import { STORAGE } from "../../constants/storage";
 import type { Patient } from "../../types/models";
 import { dermaDb, type PatientCursor, type PatientSortField, type SortDirection } from "../db/dermaDb";
 import { listEntriesSafe, readJsonFromDir } from "../storage/fsUtils";
-import { getDatasetRootDirectoryAsync, getPatientsRootDirectoryAsync } from "../storage/roots";
+import { getDatasetRootDirectoryAsync, getExistingPatientDir, getPatientsRootDirectoryAsync } from "../storage/roots";
 
 // Simple single-flight locks to prevent concurrent rebuilds/ensures.
 // This avoids duplicate work when multiple screens trigger index initialization.
@@ -85,6 +85,21 @@ export const patientIndexService = {
         await dermaDb.deleteMetaByPrefixAsync(`consultations.patient.${patientId}.`);
     },
 
+    pruneMissingPatientsAsync: async (patientIds: string[]) => {
+        // The filesystem is the source-of-truth; SQLite is a rebuildable index.
+        // If a patient folder was deleted externally, remove the stale DB rows so the patient
+        // disappears from the UI and related actions (open/delete) behave consistently.
+        await patientIndexService.ensurePatientsIndexAsync();
+
+        const missingIds = patientIds.filter((id) => !getExistingPatientDir(id));
+        if (missingIds.length === 0) return;
+
+        for (const id of missingIds) {
+            await dermaDb.deletePatientAsync(id);
+            await dermaDb.deleteMetaByPrefixAsync(`consultations.patient.${id}.`);
+        }
+    },
+
     queryPatientsPageAsync: async (input: {
         limit: number;
         search?: string;
@@ -93,6 +108,14 @@ export const patientIndexService = {
         cursor?: PatientCursor;
     }) => {
         await patientIndexService.ensurePatientsIndexAsync();
+
+        // Fetch from index, then reconcile with filesystem.
+        // If any are missing on disk, delete them from the index and retry once.
+        const first = await dermaDb.queryPatientsPageAsync(input);
+        const missingIds = first.items.map((p) => p.id).filter((id) => !getExistingPatientDir(id));
+        if (missingIds.length === 0) return first;
+
+        await patientIndexService.pruneMissingPatientsAsync(missingIds);
         return dermaDb.queryPatientsPageAsync(input);
     },
 };

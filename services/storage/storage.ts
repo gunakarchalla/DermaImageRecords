@@ -58,14 +58,16 @@ export const getPatient = async (patientId: string): Promise<Patient | null> => 
 export const deletePatient = async (patientId: string) => {
     await initStorage();
     const dir = getExistingPatientDir(patientId);
-    if (!dir) return;
 
-    // Best-effort validation reads (source-of-truth is directory presence).
-    void (await readJsonFromDir<Patient>(dir, STORAGE.patientFileName));
+    // If the folder is missing (deleted externally), treat it as already deleted on disk.
+    // The filesystem is the source-of-truth; the SQLite DB is rebuildable cache/index.
+    if (dir) {
+        // Best-effort validation reads (source-of-truth is directory presence).
+        void (await readJsonFromDir<Patient>(dir, STORAGE.patientFileName));
+        await safeDeleteDir(dir);
+    }
 
-    await safeDeleteDir(dir);
-
-    // Keep SQLite index in sync.
+    // Always keep SQLite index in sync, even when the folder is already gone.
     await patientIndexService.deletePatientAsync(patientId);
     await consultationIndexService.deleteConsultationsByPatientAsync(patientId);
 };

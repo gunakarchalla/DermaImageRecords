@@ -5,7 +5,7 @@ import { STORAGE } from "../../constants/storage";
 import type { Consultation, ConsultationIndexRow } from "../../types/models";
 import { dermaDb, type ConsultationCursor } from "../db/dermaDb";
 import { listEntriesSafe, readJsonFromDir } from "../storage/fsUtils";
-import { getExistingConsultationsRootDirForPatientAsync } from "../storage/roots";
+import { getExistingConsultationDir, getExistingConsultationsRootDirForPatientAsync } from "../storage/roots";
 import { patientIndexService } from "./patientIndexService";
 
 // Prevent concurrent rebuilds for the same patientId (e.g., rapid navigation/focus events).
@@ -69,12 +69,37 @@ export const consultationIndexService = {
         await dermaDb.deleteMetaByPrefixAsync(`consultations.patient.${patientId}.`);
     },
 
+    pruneMissingConsultationsAsync: async (patientId: string, consultationIds: string[]) => {
+        // The filesystem is the source-of-truth; SQLite is a rebuildable index.
+        // If consultation folders were deleted externally, remove stale DB rows so the UI
+        // does not show consultations that can no longer be opened.
+        await consultationIndexService.ensureConsultationsIndexForPatientAsync(patientId);
+
+        const missingIds = consultationIds.filter((id) => !getExistingConsultationDir(patientId, id));
+        if (missingIds.length === 0) return;
+
+        for (const id of missingIds) {
+            await dermaDb.deleteConsultationAsync(patientId, id);
+        }
+
+        // Mark the per-patient consultations index as fresh after pruning.
+        await dermaDb.setMetaAsync(consultationsPatientLastReindexAtKey(patientId), new Date().toISOString());
+    },
+
     queryConsultationsPageAsync: async (input: {
         patientId: string;
         limit: number;
         cursor?: ConsultationCursor;
     }): Promise<{ items: ConsultationIndexRow[]; nextCursor?: ConsultationCursor }> => {
         await consultationIndexService.ensureConsultationsIndexForPatientAsync(input.patientId);
+
+        // Fetch from index, then reconcile with filesystem.
+        // If any are missing on disk, delete them from the index and retry once.
+        const first = await dermaDb.queryConsultationsPageAsync(input);
+        const missingIds = first.items.map((c) => c.id).filter((id) => !getExistingConsultationDir(input.patientId, id));
+        if (missingIds.length === 0) return first;
+
+        await consultationIndexService.pruneMissingConsultationsAsync(input.patientId, missingIds);
         return dermaDb.queryConsultationsPageAsync(input);
     },
 };
