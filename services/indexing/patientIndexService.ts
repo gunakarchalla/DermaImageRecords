@@ -44,27 +44,27 @@ export const patientIndexService = {
         if (rebuildAllPatientsPromise) return rebuildAllPatientsPromise;
 
         rebuildAllPatientsPromise = (async () => {
-        const root = await getDatasetRootDirectoryAsync();
-        const patientsRoot = await getPatientsRootDirectoryAsync();
+            const root = await getDatasetRootDirectoryAsync();
+            const patientsRoot = await getPatientsRootDirectoryAsync();
 
-        // Full rebuild: clear all index data.
-        await dermaDb.clearAllAsync();
+            // Full rebuild: clear all index data.
+            await dermaDb.clearAllAsync();
 
-        // Meta
-        await dermaDb.setMetaAsync(INDEX_META.datasetRootUri, root.uri);
-        await dermaDb.setMetaAsync(INDEX_META.patientsLastReindexAt, new Date().toISOString());
+            // Meta
+            await dermaDb.setMetaAsync(INDEX_META.datasetRootUri, root.uri);
+            await dermaDb.setMetaAsync(INDEX_META.patientsLastReindexAt, new Date().toISOString());
 
-        // Index patients by reading patient.json in each folder.
-        const entries = listEntriesSafe(patientsRoot).filter((e) => e instanceof Directory) as Directory[];
+            // Index patients by reading patient.json in each folder.
+            const entries = listEntriesSafe(patientsRoot).filter((e) => e instanceof Directory) as Directory[];
 
-        for (const dir of entries) {
-            const patient = await readJsonFromDir<Patient>(dir, STORAGE.patientFileName);
-            if (!patient) continue;
-            await dermaDb.upsertPatientAsync(patient);
-        }
+            for (const dir of entries) {
+                const patient = await readJsonFromDir<Patient>(dir, STORAGE.patientFileName);
+                if (!patient) continue;
+                await dermaDb.upsertPatientAsync(patient);
+            }
 
-        // Any per-patient consultation meta keys are now invalid.
-        await dermaDb.deleteMetaByPrefixAsync("consultations.patient.");
+            // Any per-patient consultation meta keys are now invalid.
+            await dermaDb.deleteMetaByPrefixAsync("consultations.patient.");
         })();
 
         try {
