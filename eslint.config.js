@@ -5,6 +5,7 @@ const expoConfig = require('eslint-config-expo/flat');
 module.exports = defineConfig([
   expoConfig,
   {
-    ignores: ['dist/*'],
+    // Generated / build artifacts (should never be linted).
+    ignores: ['dist/*', '.expo/**', 'android/**/build/**'],
   },
 ]);

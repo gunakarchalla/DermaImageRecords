@@ -1,4 +1,4 @@
-import { Directory, File } from "expo-file-system";
+import { File } from "expo-file-system";
 import * as ImageManipulator from "expo-image-manipulator";
 
 import { STORAGE } from "../../constants/storage";
@@ -104,29 +104,6 @@ export const savePatient = async (patientId: string | null, input: PatientInput)
     await patientIndexService.upsertPatientAsync(patient);
 
     return patient;
-};
-
-export const listConsultations = async (patientId: string): Promise<Consultation[]> => {
-    // Kept for compatibility; index-backed flows should use consultationIndexService.
-    await initStorage();
-    const patientDirectory = getExistingPatientDir(patientId);
-    if (!patientDirectory) return [];
-
-    const consDir = patientDirectory.list().find(
-        (entry) => entry instanceof Directory && entry.name === STORAGE.consultationsFolderName
-    ) as Directory | undefined;
-
-    if (!consDir || !consDir.exists) return [];
-
-    const folders = consDir.list().filter((entry) => entry instanceof Directory) as Directory[];
-    const consultations: Consultation[] = [];
-
-    for (const folder of folders) {
-        const data = await readJsonFromDir<Consultation>(folder, STORAGE.consultationFileName);
-        if (data) consultations.push(data);
-    }
-
-    return consultations.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 };
 
 export const getConsultation = async (patientId: string, consultationId: string): Promise<Consultation | null> => {

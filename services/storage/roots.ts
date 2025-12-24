@@ -1,4 +1,4 @@
-import { Directory, Paths } from "expo-file-system";
+import { Directory } from "expo-file-system";
 
 import { STORAGE } from "../../constants/storage";
 import { getStorageDriver } from "./drivers";
@@ -73,6 +73,3 @@ export const getExistingConsultationsRootDirForPatientAsync = async (patientId: 
     if (!patientDirectory) return null;
     return getExistingConsultationsRootDir(patientDirectory);
 };
-
-// Convenience for iOS sandbox paths (kept for parity with Android SAF).
-export const getAppDocumentsDirectory = () => new Directory(Paths.document);

@@ -7,25 +7,43 @@ import { dermaDb, type PatientCursor, type PatientSortField, type SortDirection 
 import { listEntriesSafe, readJsonFromDir } from "../storage/fsUtils";
 import { getDatasetRootDirectoryAsync, getPatientsRootDirectoryAsync } from "../storage/roots";
 
+// Simple single-flight locks to prevent concurrent rebuilds/ensures.
+// This avoids duplicate work when multiple screens trigger index initialization.
+let ensurePatientsIndexPromise: Promise<void> | null = null;
+let rebuildAllPatientsPromise: Promise<void> | null = null;
+
 export const patientIndexService = {
     ensurePatientsIndexAsync: async () => {
-        const db = await dermaDb.ensureReadyAsync();
-        void db;
+        if (ensurePatientsIndexPromise) return ensurePatientsIndexPromise;
 
-        const root = await getDatasetRootDirectoryAsync();
-        const existingRootUri = await dermaDb.getMetaAsync(INDEX_META.datasetRootUri);
+        ensurePatientsIndexPromise = (async () => {
+            await dermaDb.ensureReadyAsync();
 
-        if (existingRootUri !== root.uri) {
-            await patientIndexService.rebuildAllPatientsAsync();
-        }
+            const root = await getDatasetRootDirectoryAsync();
+            const existingRootUri = await dermaDb.getMetaAsync(INDEX_META.datasetRootUri);
 
-        const lastReindex = await dermaDb.getMetaAsync(INDEX_META.patientsLastReindexAt);
-        if (!lastReindex) {
-            await patientIndexService.rebuildAllPatientsAsync();
+            if (existingRootUri !== root.uri) {
+                await patientIndexService.rebuildAllPatientsAsync();
+                return;
+            }
+
+            const lastReindex = await dermaDb.getMetaAsync(INDEX_META.patientsLastReindexAt);
+            if (!lastReindex) {
+                await patientIndexService.rebuildAllPatientsAsync();
+            }
+        })();
+
+        try {
+            await ensurePatientsIndexPromise;
+        } finally {
+            ensurePatientsIndexPromise = null;
         }
     },
 
     rebuildAllPatientsAsync: async () => {
+        if (rebuildAllPatientsPromise) return rebuildAllPatientsPromise;
+
+        rebuildAllPatientsPromise = (async () => {
         const root = await getDatasetRootDirectoryAsync();
         const patientsRoot = await getPatientsRootDirectoryAsync();
 
@@ -47,6 +65,13 @@ export const patientIndexService = {
 
         // Any per-patient consultation meta keys are now invalid.
         await dermaDb.deleteMetaByPrefixAsync("consultations.patient.");
+        })();
+
+        try {
+            await rebuildAllPatientsPromise;
+        } finally {
+            rebuildAllPatientsPromise = null;
+        }
     },
 
     upsertPatientAsync: async (patient: Patient) => {

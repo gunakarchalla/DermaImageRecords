@@ -1,6 +1,6 @@
 import * as SQLite from "expo-sqlite";
 
-import type { Consultation, Patient } from "../../types/models";
+import type { Consultation, ConsultationIndexRow, Patient } from "../../types/models";
 
 // NOTE: SQLite is a rebuildable index only. The filesystem remains the source-of-truth.
 // We keep this layer minimal and defensive: callers can always rebuild from disk.
@@ -116,56 +116,64 @@ export const dermaDb = {
     clearAllAsync: async () => {
         await ensureSchemaAsync();
         const db = await openDbAsync();
-        await db.execAsync(
+        // Use an exclusive transaction to prevent interleaving with readers/writers.
+        await db.withExclusiveTransactionAsync(async (txn) => {
+            await txn.execAsync(
+                `
+                DELETE FROM consultations;
+                DELETE FROM patients;
+                DELETE FROM meta;
             `
-            DELETE FROM consultations;
-            DELETE FROM patients;
-            DELETE FROM meta;
-        `
-        );
+            );
+        });
     },
 
     upsertPatientAsync: async (patient: Patient) => {
         await ensureSchemaAsync();
         const db = await openDbAsync();
-        await db.runAsync(
-            `
-            INSERT INTO patients(
-                id, name, nameSort, emrNumber, emrNumberSort, age, gender, phone, profilePhotoUri, createdAt, updatedAt
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name,
-                nameSort = excluded.nameSort,
-                emrNumber = excluded.emrNumber,
-                emrNumberSort = excluded.emrNumberSort,
-                age = excluded.age,
-                gender = excluded.gender,
-                phone = excluded.phone,
-                profilePhotoUri = excluded.profilePhotoUri,
-                createdAt = excluded.createdAt,
-                updatedAt = excluded.updatedAt
-        `,
-            [
-                patient.id,
-                patient.name,
-                normalizeSortText(patient.name),
-                patient.emrNumber ?? null,
-                normalizeSortText(patient.emrNumber),
-                patient.age ?? null,
-                patient.gender ?? null,
-                patient.phone ?? null,
-                patient.profilePhotoUri ?? null,
-                patient.createdAt,
-                patient.updatedAt,
-            ]
-        );
+        // Exclusive transaction keeps writes deterministic under concurrent access.
+        await db.withExclusiveTransactionAsync(async (txn) => {
+            await txn.runAsync(
+                `
+                INSERT INTO patients(
+                    id, name, nameSort, emrNumber, emrNumberSort, age, gender, phone, profilePhotoUri, createdAt, updatedAt
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    nameSort = excluded.nameSort,
+                    emrNumber = excluded.emrNumber,
+                    emrNumberSort = excluded.emrNumberSort,
+                    age = excluded.age,
+                    gender = excluded.gender,
+                    phone = excluded.phone,
+                    profilePhotoUri = excluded.profilePhotoUri,
+                    createdAt = excluded.createdAt,
+                    updatedAt = excluded.updatedAt
+            `,
+                [
+                    patient.id,
+                    patient.name,
+                    normalizeSortText(patient.name),
+                    patient.emrNumber ?? null,
+                    normalizeSortText(patient.emrNumber),
+                    patient.age ?? null,
+                    patient.gender ?? null,
+                    patient.phone ?? null,
+                    patient.profilePhotoUri ?? null,
+                    patient.createdAt,
+                    patient.updatedAt,
+                ]
+            );
+        });
     },
 
     deletePatientAsync: async (patientId: string) => {
         await ensureSchemaAsync();
         const db = await openDbAsync();
-        await db.runAsync("DELETE FROM consultations WHERE patientId = ?", [patientId]);
-        await db.runAsync("DELETE FROM patients WHERE id = ?", [patientId]);
+        await db.withExclusiveTransactionAsync(async (txn) => {
+            await txn.runAsync("DELETE FROM consultations WHERE patientId = ?", [patientId]);
+            await txn.runAsync("DELETE FROM patients WHERE id = ?", [patientId]);
+        });
     },
 
     queryPatientsPageAsync: async (input: {
@@ -261,44 +269,50 @@ export const dermaDb = {
     upsertConsultationAsync: async (consultation: Consultation) => {
         await ensureSchemaAsync();
         const db = await openDbAsync();
-        await db.runAsync(
-            `
-            INSERT INTO consultations(id, patientId, remarks, photoCount, createdAt, updatedAt)
-            VALUES(?, ?, ?, ?, ?, ?)
-            ON CONFLICT(patientId, id) DO UPDATE SET
-                remarks = excluded.remarks,
-                photoCount = excluded.photoCount,
-                createdAt = excluded.createdAt,
-                updatedAt = excluded.updatedAt
-        `,
-            [
-                consultation.id,
-                consultation.patientId,
-                consultation.remarks,
-                consultation.photoUris.length,
-                consultation.createdAt,
-                consultation.updatedAt,
-            ]
-        );
+        await db.withExclusiveTransactionAsync(async (txn) => {
+            await txn.runAsync(
+                `
+                INSERT INTO consultations(id, patientId, remarks, photoCount, createdAt, updatedAt)
+                VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(patientId, id) DO UPDATE SET
+                    remarks = excluded.remarks,
+                    photoCount = excluded.photoCount,
+                    createdAt = excluded.createdAt,
+                    updatedAt = excluded.updatedAt
+            `,
+                [
+                    consultation.id,
+                    consultation.patientId,
+                    consultation.remarks,
+                    consultation.photoUris.length,
+                    consultation.createdAt,
+                    consultation.updatedAt,
+                ]
+            );
+        });
     },
 
     deleteConsultationAsync: async (patientId: string, consultationId: string) => {
         await ensureSchemaAsync();
         const db = await openDbAsync();
-        await db.runAsync("DELETE FROM consultations WHERE patientId = ? AND id = ?", [patientId, consultationId]);
+        await db.withExclusiveTransactionAsync(async (txn) => {
+            await txn.runAsync("DELETE FROM consultations WHERE patientId = ? AND id = ?", [patientId, consultationId]);
+        });
     },
 
     deleteConsultationsByPatientAsync: async (patientId: string) => {
         await ensureSchemaAsync();
         const db = await openDbAsync();
-        await db.runAsync("DELETE FROM consultations WHERE patientId = ?", [patientId]);
+        await db.withExclusiveTransactionAsync(async (txn) => {
+            await txn.runAsync("DELETE FROM consultations WHERE patientId = ?", [patientId]);
+        });
     },
 
     queryConsultationsPageAsync: async (input: {
         patientId: string;
         limit: number;
         cursor?: ConsultationCursor;
-    }): Promise<{ items: Consultation[]; nextCursor?: ConsultationCursor }> => {
+    }): Promise<{ items: ConsultationIndexRow[]; nextCursor?: ConsultationCursor }> => {
         await ensureSchemaAsync();
         const db = await openDbAsync();
 
@@ -328,11 +342,11 @@ export const dermaDb = {
             [...args, input.limit]
         );
 
-        const items: Consultation[] = rows.map((r) => ({
+        const items: ConsultationIndexRow[] = rows.map((r) => ({
             id: r.id,
             patientId: r.patientId,
             remarks: r.remarks,
-            photoUris: Array.from({ length: r.photoCount }, () => ""),
+            photoCount: r.photoCount,
             createdAt: r.createdAt,
             updatedAt: r.updatedAt,
         }));

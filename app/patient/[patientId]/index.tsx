@@ -18,7 +18,7 @@ import { FlashList } from "@shopify/flash-list";
 import { toRenderableImageUriAsync } from "../../../services/imageUri";
 import { consultationIndexService } from "../../../services/indexing/consultationIndexService";
 import { getPatient, savePatient } from "../../../services/storage/storage";
-import { Consultation, Gender, Patient } from "../../../types/models";
+import { ConsultationIndexRow, Gender, Patient } from "../../../types/models";
 
 const CONSULTATIONS_PAGE_SIZE = 25;
 
@@ -27,7 +27,9 @@ export default function PatientDetailsScreen() {
   const { patientId } = useLocalSearchParams<{ patientId: string }>();
 
   const [patient, setPatient] = useState<Patient | null>(null);
-  const [consultations, setConsultations] = useState<Consultation[]>([]);
+  const [consultations, setConsultations] = useState<ConsultationIndexRow[]>(
+    []
+  );
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -203,7 +205,7 @@ export default function PatientDetailsScreen() {
     }
   };
 
-  const renderConsultation = ({ item }: { item: Consultation }) => (
+  const renderConsultation = ({ item }: { item: ConsultationIndexRow }) => (
     <Pressable
       onPress={() =>
         router.push(`/patient/${patientId}/consultation/${item.id}`)
@@ -222,7 +224,7 @@ export default function PatientDetailsScreen() {
         {item.remarks || "No remarks"}
       </Text>
       <Text className="text-xs text-slate-400 mt-2">
-        Photos: {item.photoUris.length}
+        Photos: {item.photoCount}
       </Text>
     </Pressable>
   );
