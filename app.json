@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "DermaImageRecords",
-    "slug": "DermaImageRecords",
+    "slug": "dermaimagerecords",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -46,6 +46,13 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "1262cd3c-e2c8-4428-b6f7-ffe08c7730fa"
+      }
+    },
+    "owner": "gunakar-challa"
   }
 }
