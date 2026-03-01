@@ -44,7 +44,7 @@ export default function ViewConsultationScreen() {
           } catch {
             return [uri, undefined] as const;
           }
-        })
+        }),
       );
       setPhotoDisplayUris(Object.fromEntries(entries));
     } else {
@@ -57,7 +57,7 @@ export default function ViewConsultationScreen() {
   useFocusEffect(
     useCallback(() => {
       load();
-    }, [load])
+    }, [load]),
   );
 
   if (loading) {
@@ -91,7 +91,7 @@ export default function ViewConsultationScreen() {
           <Pressable
             onPress={() =>
               router.push(
-                `/patient/${patientId}/consultation/add?consultationId=${consultationId}`
+                `/patient/${patientId}/consultation/add?consultationId=${consultationId}`,
               )
             }
             className="p-2"
@@ -123,13 +123,22 @@ export default function ViewConsultationScreen() {
           </View>
         ) : (
           <View className="flex-row flex-wrap">
-            {consultation.photoUris.map((uri) => (
-              <Image
+            {consultation.photoUris.map((uri, index) => (
+              <Pressable
                 key={uri}
-                source={{ uri: photoDisplayUris[uri] ?? uri }}
-                className="h-32 w-32 mr-3 mb-3 rounded-xl"
-                contentFit="cover"
-              />
+                onPress={() =>
+                  router.push(
+                    `/patient/${patientId}/consultation/${consultationId}/photos?index=${index}`,
+                  )
+                }
+                accessibilityLabel="Open photo"
+              >
+                <Image
+                  source={{ uri: photoDisplayUris[uri] ?? uri }}
+                  className="h-32 w-32 mr-3 mb-3 rounded-xl"
+                  contentFit="cover"
+                />
+              </Pressable>
             ))}
           </View>
         )}

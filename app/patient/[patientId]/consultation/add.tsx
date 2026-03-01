@@ -5,6 +5,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
+  InteractionManager,
   Pressable,
   ScrollView,
   Text,
@@ -32,6 +33,7 @@ export default function AddConsultationScreen() {
     Record<string, string | undefined>
   >({});
   const [loading, setLoading] = useState(false);
+  const [pickingImage, setPickingImage] = useState(false);
 
   const loadExisting = useCallback(async () => {
     if (consultationId && patientId) {
@@ -62,7 +64,7 @@ export default function AddConsultationScreen() {
           } catch {
             return [uri, undefined] as const;
           }
-        })
+        }),
       );
       if (cancelled) return;
       setPhotoPreviewUris(Object.fromEntries(entries));
@@ -74,6 +76,8 @@ export default function AddConsultationScreen() {
   }, [photos]);
 
   const addPhoto = async (fromCamera: boolean) => {
+    if (pickingImage || loading) return;
+
     const permission = fromCamera
       ? await ImagePicker.requestCameraPermissionsAsync()
       : await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -81,23 +85,39 @@ export default function AddConsultationScreen() {
     if (!permission.granted) {
       Alert.alert(
         "Permission needed",
-        "Please allow camera/photos access to continue."
+        "Please allow camera/photos access to continue.",
       );
       return;
     }
 
-    const result = fromCamera
-      ? await ImagePicker.launchCameraAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          quality: 1,
-        })
-      : await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          quality: 1,
-        });
+    setPickingImage(true);
+    try {
+      // Wait for navigation interactions to settle before launching the picker.
+      // This prevents Android launcher registration race conditions.
+      await new Promise<void>((resolve) => {
+        InteractionManager.runAfterInteractions(() => resolve());
+      });
 
-    if (!result.canceled && result.assets?.length) {
-      setPhotos((prev) => [...prev, result.assets[0].uri]);
+      const result = fromCamera
+        ? await ImagePicker.launchCameraAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            quality: 1,
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            quality: 1,
+          });
+
+      if (!result.canceled && result.assets?.length) {
+        setPhotos((prev) => [...prev, result.assets[0].uri]);
+      }
+    } catch {
+      Alert.alert(
+        "Photo picker unavailable",
+        "Please try again. If the issue persists, reopen this screen and retry.",
+      );
+    } finally {
+      setPickingImage(false);
     }
   };
 
@@ -160,13 +180,19 @@ export default function AddConsultationScreen() {
             <Text className="text-sm text-slate-600">Photos</Text>
             <View className="flex-row">
               <Pressable
-                className="bg-slate-900 px-3 py-2 rounded-lg mr-2"
+                className={`bg-slate-900 px-3 py-2 rounded-lg mr-2 ${
+                  pickingImage || loading ? "opacity-60" : ""
+                }`}
+                disabled={pickingImage || loading}
                 onPress={() => addPhoto(false)}
               >
                 <Text className="text-white font-semibold">Upload</Text>
               </Pressable>
               <Pressable
-                className="border border-slate-300 px-3 py-2 rounded-lg"
+                className={`border border-slate-300 px-3 py-2 rounded-lg ${
+                  pickingImage || loading ? "opacity-60" : ""
+                }`}
+                disabled={pickingImage || loading}
                 onPress={() => addPhoto(true)}
               >
                 <Text className="text-slate-800 font-semibold">Camera</Text>
