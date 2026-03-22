@@ -21,16 +21,15 @@ import {
     initStorageAsync,
 } from "./roots";
 
-const MAX_IMAGE_DIMENSION = 1280;
 const IMAGE_QUALITY = 0.7;
 
 const generateId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 const saveImageToExternalRoot = async (sourceUri: string, destination: File) => {
-    // Resize and compress photos before persisting to reduce storage usage and improve load speed.
+    // Compress photos before persisting to reduce storage usage while preserving original dimensions.
     const result = await ImageManipulator.manipulateAsync(
         sourceUri,
-        [{ resize: { width: MAX_IMAGE_DIMENSION, height: MAX_IMAGE_DIMENSION } }],
+        [],
         { compress: IMAGE_QUALITY, format: ImageManipulator.SaveFormat.JPEG }
     );
 

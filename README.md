@@ -18,15 +18,15 @@ It stores patient records and consultation photos in a **filesystem dataset** (s
 
 - Per-patient consultation list (from SQLite index) with remarks preview, date, and photo count.
 - Add/edit a consultation with:
-   - free-text **remarks**
-   - multiple photos (camera or gallery)
-   - remove photos from an existing consultation
+  - free-text **remarks**
+  - multiple photos (camera or gallery)
+  - remove photos from an existing consultation
 - View a consultation with the full photo grid.
 - Delete a consultation (removes its folder + indexed rows).
 
 ### Storage + performance
 
-- Photos are **resized and compressed** before saving to reduce storage and improve load speed.
+- Photos are **compressed** before saving to reduce storage while preserving original dimensions.
 - On Android, images saved via SAF/content URIs are converted to **render-safe cache file URIs** for reliable display.
 - SQLite is treated as a **rebuildable index/cache**; the filesystem dataset remains the **source of truth**.
 
@@ -37,12 +37,12 @@ It stores patient records and consultation photos in a **filesystem dataset** (s
 - Styling: NativeWind (Tailwind for React Native)
 - Lists: `@shopify/flash-list`
 - Persistence:
-   - Filesystem via `expo-file-system`
-   - Index via `expo-sqlite`
+  - Filesystem via `expo-file-system`
+  - Index via `expo-sqlite`
 - Images:
-   - Pick/capture via `expo-image-picker`
-   - Display via `expo-image`
-   - Resize/compress via `expo-image-manipulator`
+  - Pick/capture via `expo-image-picker`
+  - Display via `expo-image`
+  - JPEG compression via `expo-image-manipulator`
 
 ## Installation & running
 
@@ -100,8 +100,8 @@ npm run lint
 The app writes all patient and consultation data under a dataset root folder.
 
 - On Android, the dataset root is chosen via **Storage Access Framework (SAF)** directory picker.
-   - The chosen root URI is persisted in the app sandbox config file: `DermaImageRecords.storage-root.json`.
-   - The app ensures a `DermaImageRecords/` folder exists inside the picked location.
+  - The chosen root URI is persisted in the app sandbox config file: `DermaImageRecords.storage-root.json`.
+  - The app ensures a `DermaImageRecords/` folder exists inside the picked location.
 - On iOS, the dataset root is inside the app sandbox.
 
 The on-disk layout (conceptually) looks like:
@@ -123,16 +123,16 @@ The on-disk layout (conceptually) looks like:
 Notes:
 
 - Patient and consultation documents are stored as JSON (`patient.json`, `consultation.json`).
-- Photos are persisted as JPEG after resize/compression.
+- Photos are persisted as JPEG after compression.
 
 ### Rebuildable index: SQLite
 
 The app maintains a local SQLite database (`derma-index.db`) used only as a fast index.
 
 - The database contains:
-   - `patients` rows used for list/search/sort
-   - `consultations` rows used for per-patient consultation lists
-   - `meta` keys to detect when an index rebuild is needed (e.g., dataset root changed)
+  - `patients` rows used for list/search/sort
+  - `consultations` rows used for per-patient consultation lists
+  - `meta` keys to detect when an index rebuild is needed (e.g., dataset root changed)
 - The index is designed to be **rebuildable** by scanning the dataset folders.
 - Queries use cursor-based pagination to provide stable ordering.
 
@@ -153,8 +153,8 @@ Screens live under `app/` and map to routes automatically:
 - `services/storage/roots.ts`: resolves dataset roots and patient/consultation directories
 - `services/storage/storage.ts`: CRUD for patients and consultations; keeps the SQLite index in sync
 - `services/storage/drivers/*`:
-   - Android SAF driver (prompts for folder; stores chosen URI)
-   - iOS sandbox driver
+  - Android SAF driver (prompts for folder; stores chosen URI)
+  - iOS sandbox driver
 
 ### Indexing layer
 
@@ -165,7 +165,7 @@ Screens live under `app/` and map to routes automatically:
 ### Images
 
 - `services/imageUri.ts`: converts SAF/content URIs into cache `file://` URIs for rendering
-- Storage writes images after resize/compression via `expo-image-manipulator`
+- Storage writes images using JPEG compression via `expo-image-manipulator`
 
 ## Contributing
 
@@ -173,10 +173,10 @@ Screens live under `app/` and map to routes automatically:
 
 1. Create a feature branch.
 2. Keep diffs focused and consistent with the repo’s patterns:
-    - TypeScript everywhere
-    - NativeWind classes for styling
-    - `expo-router` file-based routing (add screens by adding files under `app/`)
-    - Filesystem is the source of truth; SQLite is rebuildable index/cache
+   - TypeScript everywhere
+   - NativeWind classes for styling
+   - `expo-router` file-based routing (add screens by adding files under `app/`)
+   - Filesystem is the source of truth; SQLite is rebuildable index/cache
 3. Run quality checks:
 
 ```bash
