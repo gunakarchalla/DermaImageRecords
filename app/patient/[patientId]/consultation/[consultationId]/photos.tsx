@@ -199,6 +199,7 @@ export default function ConsultationPhotosScreen() {
   const photoViewerHeight = Math.max(220, height - 180);
   const cropCanvasWidth = Math.max(100, width - 24);
   const cropCanvasHeight = Math.max(100, photoViewerHeight - 24);
+  const actionRowSlotWidth = 52;
 
   const clamp = (value: number, min: number, max: number) =>
     Math.max(min, Math.min(max, value));
@@ -665,118 +666,124 @@ export default function ConsultationPhotosScreen() {
         </View>
 
         {isCropping && currentPhotoUri && cropRect && cropImageFrame ? (
-          <View
-            style={{ width, height: photoViewerHeight }}
-            className="items-center justify-center"
-          >
+          <View className="flex-1 w-full items-center">
+            {/* Keep crop mode in the same viewport geometry as PhotoSlide to avoid visual jumps. */}
             <View
-              style={{ width: cropCanvasWidth, height: cropCanvasHeight }}
-              className="relative"
+              style={{ width, height: photoViewerHeight }}
+              className="items-center justify-center px-3"
             >
-              <Image
-                source={{
-                  uri: displayUris[currentPhotoUri] ?? currentPhotoUri,
-                }}
+              <View
                 style={{ width: cropCanvasWidth, height: cropCanvasHeight }}
-                contentFit="contain"
-              />
+                className="relative"
+              >
+                <Image
+                  source={{
+                    uri: displayUris[currentPhotoUri] ?? currentPhotoUri,
+                  }}
+                  style={{ width: cropCanvasWidth, height: cropCanvasHeight }}
+                  contentFit="contain"
+                />
 
-              <View
-                onStartShouldSetResponder={() => true}
-                onResponderGrant={(event) => startCropDrag("move", event)}
-                onResponderMove={onCropDragMove}
-                onResponderRelease={endCropDrag}
-                onResponderTerminate={endCropDrag}
-                style={{
-                  position: "absolute",
-                  left: cropRect.x,
-                  top: cropRect.y,
-                  width: cropRect.width,
-                  height: cropRect.height,
-                  borderWidth: 2,
-                  borderColor: "#e2e8f0",
-                  backgroundColor: "rgba(255,255,255,0.06)",
-                }}
-              />
+                <View
+                  onStartShouldSetResponder={() => true}
+                  onResponderGrant={(event) => startCropDrag("move", event)}
+                  onResponderMove={onCropDragMove}
+                  onResponderRelease={endCropDrag}
+                  onResponderTerminate={endCropDrag}
+                  style={{
+                    position: "absolute",
+                    left: cropRect.x,
+                    top: cropRect.y,
+                    width: cropRect.width,
+                    height: cropRect.height,
+                    borderWidth: 2,
+                    borderColor: "#e2e8f0",
+                    backgroundColor: "rgba(255,255,255,0.06)",
+                  }}
+                />
 
-              <View
-                onStartShouldSetResponder={() => true}
-                onResponderGrant={(event) => startCropDrag("topLeft", event)}
-                onResponderMove={onCropDragMove}
-                onResponderRelease={endCropDrag}
-                onResponderTerminate={endCropDrag}
-                hitSlop={12}
-                style={{
-                  position: "absolute",
-                  left: cropRect.x - 14,
-                  top: cropRect.y - 14,
-                  width: 28,
-                  height: 28,
-                  borderRadius: 14,
-                  backgroundColor: "#e2e8f0",
-                }}
-              />
+                <View
+                  onStartShouldSetResponder={() => true}
+                  onResponderGrant={(event) => startCropDrag("topLeft", event)}
+                  onResponderMove={onCropDragMove}
+                  onResponderRelease={endCropDrag}
+                  onResponderTerminate={endCropDrag}
+                  hitSlop={12}
+                  style={{
+                    position: "absolute",
+                    left: cropRect.x - 14,
+                    top: cropRect.y - 14,
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    backgroundColor: "#e2e8f0",
+                  }}
+                />
 
-              <View
-                onStartShouldSetResponder={() => true}
-                onResponderGrant={(event) => startCropDrag("topRight", event)}
-                onResponderMove={onCropDragMove}
-                onResponderRelease={endCropDrag}
-                onResponderTerminate={endCropDrag}
-                hitSlop={12}
-                style={{
-                  position: "absolute",
-                  left: cropRect.x + cropRect.width - 14,
-                  top: cropRect.y - 14,
-                  width: 28,
-                  height: 28,
-                  borderRadius: 14,
-                  backgroundColor: "#e2e8f0",
-                }}
-              />
+                <View
+                  onStartShouldSetResponder={() => true}
+                  onResponderGrant={(event) => startCropDrag("topRight", event)}
+                  onResponderMove={onCropDragMove}
+                  onResponderRelease={endCropDrag}
+                  onResponderTerminate={endCropDrag}
+                  hitSlop={12}
+                  style={{
+                    position: "absolute",
+                    left: cropRect.x + cropRect.width - 14,
+                    top: cropRect.y - 14,
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    backgroundColor: "#e2e8f0",
+                  }}
+                />
 
-              <View
-                onStartShouldSetResponder={() => true}
-                onResponderGrant={(event) => startCropDrag("bottomLeft", event)}
-                onResponderMove={onCropDragMove}
-                onResponderRelease={endCropDrag}
-                onResponderTerminate={endCropDrag}
-                hitSlop={12}
-                style={{
-                  position: "absolute",
-                  left: cropRect.x - 14,
-                  top: cropRect.y + cropRect.height - 14,
-                  width: 28,
-                  height: 28,
-                  borderRadius: 14,
-                  backgroundColor: "#e2e8f0",
-                }}
-              />
+                <View
+                  onStartShouldSetResponder={() => true}
+                  onResponderGrant={(event) =>
+                    startCropDrag("bottomLeft", event)
+                  }
+                  onResponderMove={onCropDragMove}
+                  onResponderRelease={endCropDrag}
+                  onResponderTerminate={endCropDrag}
+                  hitSlop={12}
+                  style={{
+                    position: "absolute",
+                    left: cropRect.x - 14,
+                    top: cropRect.y + cropRect.height - 14,
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    backgroundColor: "#e2e8f0",
+                  }}
+                />
 
-              <View
-                onStartShouldSetResponder={() => true}
-                onResponderGrant={(event) =>
-                  startCropDrag("bottomRight", event)
-                }
-                onResponderMove={onCropDragMove}
-                onResponderRelease={endCropDrag}
-                onResponderTerminate={endCropDrag}
-                hitSlop={12}
-                style={{
-                  position: "absolute",
-                  left: cropRect.x + cropRect.width - 14,
-                  top: cropRect.y + cropRect.height - 14,
-                  width: 28,
-                  height: 28,
-                  borderRadius: 14,
-                  backgroundColor: "#e2e8f0",
-                }}
-              />
+                <View
+                  onStartShouldSetResponder={() => true}
+                  onResponderGrant={(event) =>
+                    startCropDrag("bottomRight", event)
+                  }
+                  onResponderMove={onCropDragMove}
+                  onResponderRelease={endCropDrag}
+                  onResponderTerminate={endCropDrag}
+                  hitSlop={12}
+                  style={{
+                    position: "absolute",
+                    left: cropRect.x + cropRect.width - 14,
+                    top: cropRect.y + cropRect.height - 14,
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    backgroundColor: "#e2e8f0",
+                  }}
+                />
+              </View>
             </View>
           </View>
         ) : (
           <FlatList
             ref={listRef}
+            style={{ flex: 1 }}
             data={consultation.photoUris}
             horizontal
             pagingEnabled
@@ -820,10 +827,13 @@ export default function ConsultationPhotosScreen() {
                 disabled={mutating}
                 onPress={discardCropMode}
                 accessibilityLabel="Discard crop"
-                className="px-5 py-3 rounded-lg border border-slate-400"
+                style={{ minWidth: actionRowSlotWidth + 28 }}
+                className="items-center justify-center px-4 py-3 rounded-lg border border-slate-400"
               >
                 <Text className="text-slate-200 font-semibold">Discard</Text>
               </Pressable>
+
+              <View style={{ width: actionRowSlotWidth }} />
 
               <Pressable
                 disabled={mutating}
@@ -831,7 +841,8 @@ export default function ConsultationPhotosScreen() {
                   void saveCrop();
                 }}
                 accessibilityLabel="Save crop"
-                className="px-5 py-3 rounded-lg bg-slate-200"
+                style={{ minWidth: actionRowSlotWidth + 28 }}
+                className="items-center justify-center px-4 py-3 rounded-lg bg-slate-200"
               >
                 <Text className="text-slate-900 font-semibold">Save</Text>
               </Pressable>

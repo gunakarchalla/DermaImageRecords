@@ -9,7 +9,10 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 
 import { FlashList } from "@shopify/flash-list";
 
@@ -30,6 +33,7 @@ const PAGE_SIZE = 50;
 
 export default function HomeScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [patients, setPatients] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -39,7 +43,7 @@ export default function HomeScreen() {
   const [sort, setSort] = useState(DEFAULT_SORT);
 
   const cursorRef = useRef<{ sortValue: string; id: string } | undefined>(
-    undefined
+    undefined,
   );
   const loadSeq = useRef(0);
 
@@ -70,7 +74,7 @@ export default function HomeScreen() {
     } catch (error) {
       Alert.alert(
         "Load failed",
-        `Could not load patients. Please try again. Error: ${(error as Error).message}`
+        `Could not load patients. Please try again. Error: ${(error as Error).message}`,
       );
     } finally {
       setLoading(false);
@@ -117,7 +121,7 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       loadFirstPage();
-    }, [loadFirstPage])
+    }, [loadFirstPage]),
   );
 
   const confirmDelete = useCallback(
@@ -137,15 +141,15 @@ export default function HomeScreen() {
               } catch (error) {
                 Alert.alert(
                   "Delete failed",
-                  `Could not delete this patient. Error: ${(error as Error).message}`
+                  `Could not delete this patient. Error: ${(error as Error).message}`,
                 );
               }
             },
           },
-        ]
+        ],
       );
     },
-    [loadFirstPage]
+    [loadFirstPage],
   );
 
   const toggleDirection = () => {
@@ -166,8 +170,11 @@ export default function HomeScreen() {
         onDelete={confirmDelete}
       />
     ),
-    [confirmDelete, router]
+    [confirmDelete, router],
   );
+
+  const fabBottomOffset = Math.max(insets.bottom + 16, 32);
+  const listBottomPadding = fabBottomOffset + 72;
 
   return (
     <SafeAreaView className="flex-1 bg-slate-50">
@@ -241,7 +248,10 @@ export default function HomeScreen() {
           data={patients}
           keyExtractor={(item) => item.id}
           renderItem={renderPatient}
-          contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
+          contentContainerStyle={{
+            padding: 16,
+            paddingBottom: listBottomPadding,
+          }}
           onEndReached={loadMore}
           onEndReachedThreshold={0.5}
           ListEmptyComponent={
@@ -263,7 +273,8 @@ export default function HomeScreen() {
       )}
 
       <Pressable
-        className="absolute bottom-8 right-6 bg-slate-900 h-14 w-14 rounded-full items-center justify-center shadow-lg"
+        className="absolute right-6 bg-slate-900 h-14 w-14 rounded-full items-center justify-center shadow-lg"
+        style={{ bottom: fabBottomOffset }}
         onPress={() => router.push("/patient/add")}
         accessibilityLabel="Add patient"
       >

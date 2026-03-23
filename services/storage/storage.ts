@@ -160,20 +160,26 @@ export const saveConsultation = async (
     const incomingUris = input.photoUris;
 
     const preservedUris: string[] = [];
+    const existingSet = new Set(existingPhotoUris);
+    const incomingSet = new Set(incomingUris);
 
-    // Keep files the user kept and delete removed ones.
+    // Delete files that were removed by the user.
     for (let index = 0; index < existingPhotoUris.length; index += 1) {
         const uri = existingPhotoUris[index];
-        if (incomingUris.includes(uri)) {
-            preservedUris.push(uri);
-        } else {
+        if (!incomingSet.has(uri)) {
             await safeDeleteFile(uri);
         }
     }
 
-    // Save newly added photos.
+    // Rebuild in incoming order so edited photos stay at the same position.
     for (const uri of incomingUris) {
         if (preservedUris.includes(uri)) continue;
+
+        if (existingSet.has(uri)) {
+            preservedUris.push(uri);
+            continue;
+        }
+
         const fileName = `${generateId()}.jpg`;
         const dest = await replaceFileInDirectoryAsync(dir, fileName, "image/jpeg");
         const saved = await saveImageToExternalRoot(uri, dest);
