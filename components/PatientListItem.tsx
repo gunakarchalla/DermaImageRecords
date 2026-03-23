@@ -12,6 +12,11 @@ type Props = {
   onDelete: (patient: Patient) => void;
 };
 
+const withCacheBuster = (uri: string, cacheKey: string) => {
+  const separator = uri.includes("?") ? "&" : "?";
+  return `${uri}${separator}v=${encodeURIComponent(cacheKey)}`;
+};
+
 // Memoized row component to minimize re-renders in large lists.
 export const PatientListItem = memo(function PatientListItem({
   patient,
@@ -26,7 +31,11 @@ export const PatientListItem = memo(function PatientListItem({
     void (async () => {
       try {
         const uri = await toRenderableImageUriAsync(patient.profilePhotoUri);
-        if (!cancelled) setDisplayUri(uri);
+        if (!cancelled) {
+          setDisplayUri(
+            uri ? withCacheBuster(uri, patient.updatedAt) : undefined,
+          );
+        }
       } catch {
         if (!cancelled) setDisplayUri(undefined);
       }
@@ -35,7 +44,7 @@ export const PatientListItem = memo(function PatientListItem({
     return () => {
       cancelled = true;
     };
-  }, [patient.id, patient.profilePhotoUri]);
+  }, [patient.id, patient.profilePhotoUri, patient.updatedAt]);
 
   return (
     <Pressable

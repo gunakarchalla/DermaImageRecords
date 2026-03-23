@@ -92,8 +92,13 @@ export const savePatient = async (patientId: string | null, input: PatientInput)
         updatedAt: now,
     };
 
-    if (input.profilePhotoUri) {
-        // Always overwrite the single profile photo file in-place.
+    const hasNewProfilePhoto = Boolean(
+        input.profilePhotoUri && input.profilePhotoUri !== existing?.profilePhotoUri
+    );
+
+    if (hasNewProfilePhoto && input.profilePhotoUri) {
+    // Overwrite profile photo only when user selected a new image.
+    // Reprocessing the previously persisted SAF URI can fail on Android.
         const dest = await replaceFileInDirectoryAsync(dir, STORAGE.profilePhotoFileName, "image/jpeg");
         const saved = await saveImageToExternalRoot(input.profilePhotoUri, dest);
         patient.profilePhotoUri = saved.uri;

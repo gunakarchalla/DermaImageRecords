@@ -26,13 +26,18 @@ import { ConsultationIndexRow, Gender, Patient } from "../../../types/models";
 
 const CONSULTATIONS_PAGE_SIZE = 25;
 
+const withCacheBuster = (uri: string, cacheKey: string) => {
+  const separator = uri.includes("?") ? "&" : "?";
+  return `${uri}${separator}v=${encodeURIComponent(cacheKey)}`;
+};
+
 export default function PatientDetailsScreen() {
   const router = useRouter();
   const { patientId } = useLocalSearchParams<{ patientId: string }>();
 
   const [patient, setPatient] = useState<Patient | null>(null);
   const [consultations, setConsultations] = useState<ConsultationIndexRow[]>(
-    []
+    [],
   );
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -44,7 +49,7 @@ export default function PatientDetailsScreen() {
   >();
 
   const cursorRef = useRef<{ updatedAt: string; id: string } | undefined>(
-    undefined
+    undefined,
   );
   const [form, setForm] = useState({
     name: "",
@@ -66,9 +71,13 @@ export default function PatientDetailsScreen() {
         // Resolve stored SAF/content URIs to a render-safe cache URI.
         try {
           const displayUri = await toRenderableImageUriAsync(
-            patientData.profilePhotoUri
+            patientData.profilePhotoUri,
           );
-          setProfilePhotoDisplayUri(displayUri);
+          setProfilePhotoDisplayUri(
+            displayUri
+              ? withCacheBuster(displayUri, patientData.updatedAt)
+              : undefined,
+          );
         } catch {
           setProfilePhotoDisplayUri(undefined);
         }
@@ -97,7 +106,7 @@ export default function PatientDetailsScreen() {
     } catch (error) {
       Alert.alert(
         "Load failed",
-        `Could not load patient details. Error: ${(error as Error).message}`
+        `Could not load patient details. Error: ${(error as Error).message}`,
       );
     } finally {
       setLoading(false);
@@ -160,21 +169,21 @@ export default function PatientDetailsScreen() {
               } catch (error) {
                 Alert.alert(
                   "Delete failed",
-                  `Could not delete this consultation. Error: ${(error as Error).message}`
+                  `Could not delete this consultation. Error: ${(error as Error).message}`,
                 );
               }
             },
           },
-        ]
+        ],
       );
     },
-    [patientId, reloadConsultationsFirstPage]
+    [patientId, reloadConsultationsFirstPage],
   );
 
   useFocusEffect(
     useCallback(() => {
       loadData();
-    }, [loadData])
+    }, [loadData]),
   );
 
   const requestPhoto = async (fromCamera: boolean) => {
@@ -185,7 +194,7 @@ export default function PatientDetailsScreen() {
     if (!permission.granted) {
       Alert.alert(
         "Permission needed",
-        "Please allow camera/photos access to continue."
+        "Please allow camera/photos access to continue.",
       );
       return;
     }
@@ -207,9 +216,15 @@ export default function PatientDetailsScreen() {
       // For previews, normalize any `content://` URIs.
       try {
         const displayUri = await toRenderableImageUriAsync(pickedUri);
-        setProfilePhotoDisplayUri(displayUri);
+        setProfilePhotoDisplayUri(
+          displayUri
+            ? withCacheBuster(displayUri, String(Date.now()))
+            : undefined,
+        );
       } catch {
-        setProfilePhotoDisplayUri(pickedUri);
+        setProfilePhotoDisplayUri(
+          withCacheBuster(pickedUri, String(Date.now())),
+        );
       }
     }
   };
@@ -234,21 +249,27 @@ export default function PatientDetailsScreen() {
         profilePhotoUri,
       });
       setPatient(updated);
+      // Keep form state aligned with the persisted profile URI after save.
+      setProfilePhotoUri(updated.profilePhotoUri);
       setEditing(false);
 
       // Persisted image URI may change (SAF content URI). Refresh preview.
       try {
         const displayUri = await toRenderableImageUriAsync(
-          updated.profilePhotoUri
+          updated.profilePhotoUri,
         );
-        setProfilePhotoDisplayUri(displayUri);
+        setProfilePhotoDisplayUri(
+          displayUri
+            ? withCacheBuster(displayUri, updated.updatedAt)
+            : undefined,
+        );
       } catch {
         setProfilePhotoDisplayUri(undefined);
       }
     } catch (error) {
       Alert.alert(
         "Save failed",
-        `Could not update patient. Error: ${(error as Error).message}`
+        `Could not update patient. Error: ${(error as Error).message}`,
       );
     }
   };
