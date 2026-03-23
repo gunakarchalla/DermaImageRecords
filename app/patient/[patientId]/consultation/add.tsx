@@ -59,6 +59,9 @@ export default function AddConsultationScreen() {
   const FILTER_TRAY_BOTTOM = 112;
   const MIN_CAMERA_READY_DELAY_MS = 350;
   const CAPTURE_RETRY_DELAY_MS = 220;
+  const OVERLAY_LAYER_Z_INDEX = 1;
+  const CAMERA_CONTROLS_Z_INDEX = 20;
+  const FILTER_UI_Z_INDEX = 30;
 
   const loadExisting = useCallback(async () => {
     if (consultationId && patientId) {
@@ -454,26 +457,35 @@ export default function AddConsultationScreen() {
                 onMountError={handleCameraMountError}
               >
                 {selectedFilterUri ? (
-                  <Image
-                    source={{
-                      uri:
-                        patientFilterPreviewUris[selectedFilterUri] ??
-                        selectedFilterUri,
-                    }}
+                  <View
+                    pointerEvents="none"
                     style={{
                       position: "absolute",
                       top: 0,
                       left: 0,
                       right: 0,
                       bottom: 0,
-                      opacity: filterOpacity,
+                      zIndex: OVERLAY_LAYER_Z_INDEX,
                     }}
-                    contentFit="cover"
-                  />
+                  >
+                    <Image
+                      source={{
+                        uri:
+                          patientFilterPreviewUris[selectedFilterUri] ??
+                          selectedFilterUri,
+                      }}
+                      style={{
+                        flex: 1,
+                        opacity: filterOpacity,
+                      }}
+                      contentFit="cover"
+                    />
+                  </View>
                 ) : null}
 
                 <Pressable
                   className="absolute top-4 right-4 bg-black/45 rounded-full p-3"
+                  style={{ zIndex: CAMERA_CONTROLS_Z_INDEX, elevation: 10 }}
                   onPress={closeCameraPreview}
                   accessibilityLabel="Close camera"
                 >
@@ -482,7 +494,11 @@ export default function AddConsultationScreen() {
 
                 <Pressable
                   className="absolute left-4 bg-black/45 rounded-full p-3"
-                  style={{ bottom: CAMERA_CONTROLS_BOTTOM }}
+                  style={{
+                    bottom: CAMERA_CONTROLS_BOTTOM,
+                    zIndex: CAMERA_CONTROLS_Z_INDEX,
+                    elevation: 10,
+                  }}
                   onPress={() => setShowFilterPicker((prev) => !prev)}
                   accessibilityLabel="Toggle filter previews"
                 >
@@ -500,6 +516,8 @@ export default function AddConsultationScreen() {
                     width: 72,
                     height: 72,
                     opacity: captureButtonOpacity,
+                    zIndex: CAMERA_CONTROLS_Z_INDEX,
+                    elevation: 10,
                   }}
                   onPress={captureCameraPhoto}
                   disabled={isCaptureDisabled}
@@ -515,7 +533,11 @@ export default function AddConsultationScreen() {
                 {showFilterPicker ? (
                   <View
                     className="absolute left-0 right-0 pb-4 pt-3 bg-black/65"
-                    style={{ bottom: FILTER_TRAY_BOTTOM }}
+                    style={{
+                      bottom: FILTER_TRAY_BOTTOM,
+                      zIndex: FILTER_UI_Z_INDEX,
+                      elevation: 12,
+                    }}
                   >
                     <Text className="text-white px-4 text-sm font-semibold mb-2">
                       Consultation filters
@@ -597,7 +619,11 @@ export default function AddConsultationScreen() {
                 {!showFilterPicker && selectedFilterUri ? (
                   <View
                     className="absolute left-4 right-4 rounded-xl bg-black/60 p-3"
-                    style={{ bottom: 108 }}
+                    style={{
+                      bottom: 108,
+                      zIndex: FILTER_UI_Z_INDEX,
+                      elevation: 12,
+                    }}
                   >
                     <Text className="text-slate-200 text-xs mb-1">
                       Filter transparency ({Math.round(filterOpacity * 100)}%)
