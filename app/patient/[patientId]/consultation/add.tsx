@@ -45,6 +45,7 @@ export default function AddConsultationScreen() {
   const [capturingPhoto, setCapturingPhoto] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraReadyAt, setCameraReadyAt] = useState<number | null>(null);
+  const [torchEnabled, setTorchEnabled] = useState(false);
   const [showFilterPicker, setShowFilterPicker] = useState(false);
   const [selectedFilterUri, setSelectedFilterUri] = useState<string | null>(
     null,
@@ -185,6 +186,7 @@ export default function AddConsultationScreen() {
     setShowFilterPicker(false);
     setSelectedFilterUri(null);
     setFilterOpacity(0.3);
+    setTorchEnabled(false);
     setCameraReady(false);
     setCameraReadyAt(null);
     setCameraVisible(true);
@@ -274,6 +276,7 @@ export default function AddConsultationScreen() {
             setPhotos((prev) => [...prev, result.uri]);
             setCameraVisible(false);
             setShowFilterPicker(false);
+            setTorchEnabled(false);
             setCameraReady(false);
             setCameraReadyAt(null);
             return;
@@ -307,6 +310,7 @@ export default function AddConsultationScreen() {
   const closeCameraPreview = () => {
     setCameraVisible(false);
     setShowFilterPicker(false);
+    setTorchEnabled(false);
     setCameraReady(false);
     setCameraReadyAt(null);
   };
@@ -453,6 +457,7 @@ export default function AddConsultationScreen() {
                 }}
                 style={{ flex: 1 }}
                 facing="back"
+                enableTorch={torchEnabled}
                 onCameraReady={handleCameraReady}
                 onMountError={handleCameraMountError}
               >
@@ -482,6 +487,21 @@ export default function AddConsultationScreen() {
                     />
                   </View>
                 ) : null}
+
+                <Pressable
+                  className="absolute top-4 left-4 bg-black/45 rounded-full p-3"
+                  style={{ zIndex: CAMERA_CONTROLS_Z_INDEX, elevation: 10 }}
+                  onPress={() => setTorchEnabled((prev) => !prev)}
+                  accessibilityLabel={
+                    torchEnabled ? "Disable flash" : "Enable flash"
+                  }
+                >
+                  <Feather
+                    name={torchEnabled ? "zap" : "zap-off"}
+                    size={20}
+                    color={torchEnabled ? "#facc15" : "#ffffff"}
+                  />
+                </Pressable>
 
                 <Pressable
                   className="absolute top-4 right-4 bg-black/45 rounded-full p-3"
