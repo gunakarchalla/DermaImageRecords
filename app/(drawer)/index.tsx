@@ -16,10 +16,10 @@ import {
 
 import { FlashList } from "@shopify/flash-list";
 
-import { PatientListItem } from "../components/PatientListItem";
-import { patientIndexService } from "../services/indexing/patientIndexService";
-import { deletePatient } from "../services/storage/storage";
-import type { Patient } from "../types/models";
+import { PatientListItem } from "../../components/PatientListItem";
+import { patientIndexService } from "../../services/indexing/patientIndexService";
+import { deletePatient } from "../../services/storage/storage";
+import type { Patient } from "../../types/models";
 
 type SortField = "updatedAt" | "createdAt" | "name";
 type SortDirection = "asc" | "desc";
@@ -177,9 +177,11 @@ export default function HomeScreen() {
   const listBottomPadding = fabBottomOffset + 72;
 
   return (
-    <SafeAreaView className="flex-1 bg-slate-50">
+    <SafeAreaView
+      edges={["bottom", "left", "right"]}
+      className="flex-1 bg-slate-50"
+    >
       <View className="px-4 pt-4 pb-2">
-        <Text className="text-2xl font-bold text-slate-900 mb-3">Patients</Text>
         <View className="flex-row items-center bg-white rounded-xl px-3 py-2 shadow-sm">
           <Feather name="search" size={18} color="#475569" />
           <TextInput
