@@ -92,3 +92,15 @@ export const toRenderableImageUriAsync = async (uri?: string | null): Promise<st
 
     return destination.uri;
 };
+
+/**
+ * Delete all render-safe cached copies. Used when wiping data so stale previews
+ * don't linger; the cache is rebuilt lazily on the next render.
+ */
+export const clearImageCacheAsync = async (): Promise<void> => {
+    try {
+        if (IMAGE_CACHE_DIR.exists) IMAGE_CACHE_DIR.delete();
+    } catch {
+        // Best-effort; a leftover cache dir is harmless and self-heals.
+    }
+};

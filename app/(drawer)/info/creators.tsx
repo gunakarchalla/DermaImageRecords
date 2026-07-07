@@ -30,19 +30,19 @@ const CREATORS: Creator[] = [
 
 function CreatorCard({ creator }: { creator: Creator }) {
   return (
-    <View className="mb-4 items-center rounded-2xl bg-white p-6 shadow-sm">
+    <View className="mb-4 items-center rounded-2xl bg-white p-6 shadow-sm dark:bg-slate-900">
       <Image
         source={creator.photo}
         className="h-28 w-28 rounded-full"
         contentFit="cover"
       />
-      <Text className="mt-4 text-xl font-bold text-slate-900">
+      <Text className="mt-4 text-xl font-bold text-slate-900 dark:text-slate-100">
         {creator.name}
       </Text>
-      <Text className="mt-1 text-sm font-medium text-slate-500">
+      <Text className="mt-1 text-sm font-medium text-slate-500 dark:text-slate-400">
         {creator.role}
       </Text>
-      <Text className="mt-3 text-center text-base leading-6 text-slate-600">
+      <Text className="mt-3 text-center text-base leading-6 text-slate-600 dark:text-slate-300">
         {creator.bio}
       </Text>
       <Pressable
@@ -60,9 +60,9 @@ function CreatorCard({ creator }: { creator: Creator }) {
 
 export default function CreatorsScreen() {
   return (
-    <SafeAreaView className="flex-1 bg-slate-50">
+    <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950">
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
-        <Text className="mb-4 text-base leading-6 text-slate-600">
+        <Text className="mb-4 text-base leading-6 text-slate-600 dark:text-slate-300">
           DermaImageRecords is built by two people who wanted a simpler way to
           keep clinical images organized.
         </Text>

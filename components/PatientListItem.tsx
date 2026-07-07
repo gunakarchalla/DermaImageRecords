@@ -3,6 +3,7 @@ import { Image } from "expo-image";
 import { memo, useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
+import { useThemeColors } from "../hooks/useThemeColors";
 import { toRenderableImageUriAsync } from "../services/imageUri";
 import type { Patient } from "../types/models";
 
@@ -23,6 +24,7 @@ export const PatientListItem = memo(function PatientListItem({
   onPress,
   onDelete,
 }: Props) {
+  const colors = useThemeColors();
   const [displayUri, setDisplayUri] = useState<string | undefined>();
 
   useEffect(() => {
@@ -49,7 +51,7 @@ export const PatientListItem = memo(function PatientListItem({
   return (
     <Pressable
       onPress={() => onPress(patient)}
-      className="flex-row items-center bg-white mb-3 rounded-xl p-4 shadow-sm"
+      className="flex-row items-center bg-white mb-3 rounded-xl p-4 shadow-sm dark:bg-slate-900"
     >
       {patient.profilePhotoUri && displayUri ? (
         <Image
@@ -58,21 +60,21 @@ export const PatientListItem = memo(function PatientListItem({
           contentFit="cover"
         />
       ) : (
-        <View className="h-14 w-14 rounded-full mr-4 bg-slate-200 items-center justify-center">
-          <Feather name="user" size={26} color="#475569" />
+        <View className="h-14 w-14 rounded-full mr-4 bg-slate-200 items-center justify-center dark:bg-slate-800">
+          <Feather name="user" size={26} color={colors.icon} />
         </View>
       )}
 
       <View className="flex-1">
-        <Text className="text-lg font-semibold text-slate-900">
+        <Text className="text-lg font-semibold text-slate-900 dark:text-slate-100">
           {patient.name}
         </Text>
         {patient.emrNumber ? (
-          <Text className="text-sm text-slate-500">
+          <Text className="text-sm text-slate-500 dark:text-slate-400">
             EMR: {patient.emrNumber}
           </Text>
         ) : null}
-        <Text className="text-xs text-slate-400 mt-1">
+        <Text className="text-xs text-slate-400 mt-1 dark:text-slate-500">
           Updated {new Date(patient.updatedAt).toLocaleString()}
         </Text>
       </View>
@@ -82,7 +84,7 @@ export const PatientListItem = memo(function PatientListItem({
         onPress={() => onDelete(patient)}
         className="p-2"
       >
-        <Feather name="trash-2" size={20} color="#e11d48" />
+        <Feather name="trash-2" size={20} color={colors.danger} />
       </Pressable>
     </Pressable>
   );

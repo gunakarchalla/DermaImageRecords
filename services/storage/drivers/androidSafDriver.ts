@@ -22,7 +22,46 @@ const writeStorageRootToConfig = async (rootUri: string) => {
     STORAGE_ROOT_CONFIG_FILE.write(JSON.stringify({ rootUri }, null, 2));
 };
 
+const clearStorageRootConfig = async () => {
+    try {
+        if (STORAGE_ROOT_CONFIG_FILE.exists) STORAGE_ROOT_CONFIG_FILE.delete();
+    } catch {
+        // Best-effort; a stale config just gets overwritten on the next pick.
+    }
+};
+
+/**
+ * Prompt the user (SAF directory picker), ensure a DermaImageRecords folder
+ * exists inside the picked location, persist it, and return the root Directory.
+ */
+const pickAndPersistRootAsync = async (): Promise<Directory> => {
+    // Recommend picking "Pictures" so we can create /Pictures/DermaImageRecords.
+    let pickedBase: Awaited<ReturnType<typeof Directory.pickDirectoryAsync>>;
+    try {
+        pickedBase = await Directory.pickDirectoryAsync();
+    } catch {
+        throw new Error("Storage location not selected.");
+    }
+
+    // `pickDirectoryAsync` returns a Directory instance from the underlying native module type.
+    // Wrap it into the exported `Directory` class so we can use helpers like `.name`.
+    const picked = new Directory(pickedBase.uri);
+
+    // If the user picked Pictures (or anything else), ensure a DermaImageRecords folder exists inside.
+    const root =
+        picked.name === STORAGE.externalRootFolderName
+            ? picked
+            : await getOrCreateChildDirectoryAsync(picked, STORAGE.externalRootFolderName);
+
+    await ensureDirAsync(root);
+    await writeStorageRootToConfig(root.uri);
+
+    return root;
+};
+
 export const androidSafDriver: StorageDriver = {
+    supportsFolderSelection: true,
+
     getDatasetRootDirectoryAsync: async () => {
         // 1) Try previously-selected root.
         const savedUri = await readStorageRootFromConfig();
@@ -35,27 +74,12 @@ export const androidSafDriver: StorageDriver = {
         }
 
         // 2) Prompt user to pick a directory (Android: SAF).
-        // Recommend picking "Pictures" so we can create /Pictures/DermaImageRecords.
-        let pickedBase: Awaited<ReturnType<typeof Directory.pickDirectoryAsync>>;
-        try {
-            pickedBase = await Directory.pickDirectoryAsync();
-        } catch {
-            throw new Error("Storage location not selected.");
-        }
-
-        // `pickDirectoryAsync` returns a Directory instance from the underlying native module type.
-        // Wrap it into the exported `Directory` class so we can use helpers like `.name`.
-        const picked = new Directory(pickedBase.uri);
-
-        // If the user picked Pictures (or anything else), ensure a DermaImageRecords folder exists inside.
-        const root =
-            picked.name === STORAGE.externalRootFolderName
-                ? picked
-                : await getOrCreateChildDirectoryAsync(picked, STORAGE.externalRootFolderName);
-
-        await ensureDirAsync(root);
-        await writeStorageRootToConfig(root.uri);
-
-        return root;
+        return pickAndPersistRootAsync();
     },
+
+    getPersistedRootUriAsync: async () => readStorageRootFromConfig(),
+
+    changeRootDirectoryAsync: async () => pickAndPersistRootAsync(),
+
+    clearPersistedRootAsync: async () => clearStorageRootConfig(),
 };

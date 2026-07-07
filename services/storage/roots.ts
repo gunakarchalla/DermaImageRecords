@@ -28,6 +28,15 @@ export const initStorageAsync = async () => {
     await requireRootsAsync();
 };
 
+/**
+ * Drop the cached root directory singletons so the next access re-resolves them
+ * from the driver. Call after changing the storage folder or wiping data.
+ */
+export const resetStorageRootsCache = () => {
+    DATASET_ROOT_DIR = null;
+    PATIENTS_ROOT_DIR = null;
+};
+
 export const getDatasetRootDirectoryAsync = async (): Promise<Directory> => {
     await requireRootsAsync();
     return DATASET_ROOT_DIR!;

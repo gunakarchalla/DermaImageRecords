@@ -15,8 +15,10 @@ import {
 } from "react-native-safe-area-context";
 
 import { FlashList } from "@shopify/flash-list";
+import { useColorScheme } from "nativewind";
 
 import { PatientListItem } from "../../components/PatientListItem";
+import { useThemeColors } from "../../hooks/useThemeColors";
 import { patientIndexService } from "../../services/indexing/patientIndexService";
 import { deletePatient } from "../../services/storage/storage";
 import type { Patient } from "../../types/models";
@@ -34,6 +36,9 @@ const PAGE_SIZE = 50;
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const { colorScheme } = useColorScheme();
+  const isDark = colorScheme === "dark";
   const [patients, setPatients] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -179,24 +184,24 @@ export default function HomeScreen() {
   return (
     <SafeAreaView
       edges={["bottom", "left", "right"]}
-      className="flex-1 bg-slate-50"
+      className="flex-1 bg-slate-50 dark:bg-slate-950"
     >
       <View className="px-4 pt-4 pb-2">
-        <View className="flex-row items-center bg-white rounded-xl px-3 py-2 shadow-sm">
-          <Feather name="search" size={18} color="#475569" />
+        <View className="flex-row items-center bg-white rounded-xl px-3 py-2 shadow-sm dark:bg-slate-900">
+          <Feather name="search" size={18} color={colors.icon} />
           <TextInput
             value={search}
             onChangeText={setSearch}
             placeholder="Search by name or EMR"
-            className="flex-1 ml-2 text-base"
-            placeholderTextColor="#94a3b8"
+            className="flex-1 ml-2 text-base text-slate-900 dark:text-slate-100"
+            placeholderTextColor={colors.placeholder}
             autoCapitalize="none"
             autoCorrect={false}
           />
         </View>
 
         <View className="flex-row items-center mt-3">
-          <Text className="text-sm text-slate-600 mr-2">Sort:</Text>
+          <Text className="text-sm text-slate-600 mr-2 dark:text-slate-400">Sort:</Text>
           {(
             [
               { label: "Modified", value: "updatedAt" },
@@ -209,13 +214,15 @@ export default function HomeScreen() {
               onPress={() => setField(option.value)}
               className={`px-3 py-1 mr-2 rounded-full border ${
                 sort.field === option.value
-                  ? "bg-slate-900 border-slate-900"
-                  : "border-slate-200"
+                  ? "bg-slate-900 border-slate-900 dark:bg-slate-100 dark:border-slate-100"
+                  : "border-slate-200 dark:border-slate-700"
               }`}
             >
               <Text
                 className={`text-xs font-semibold ${
-                  sort.field === option.value ? "text-white" : "text-slate-700"
+                  sort.field === option.value
+                    ? "text-white dark:text-slate-900"
+                    : "text-slate-700 dark:text-slate-300"
                 }`}
               >
                 {option.label}
@@ -225,16 +232,16 @@ export default function HomeScreen() {
 
           <Pressable
             onPress={toggleDirection}
-            className="ml-auto px-3 py-1 rounded-full bg-slate-200 flex-row items-center"
+            className="ml-auto px-3 py-1 rounded-full bg-slate-200 flex-row items-center dark:bg-slate-800"
           >
             <MaterialIcons
               name={
                 sort.direction === "asc" ? "arrow-upward" : "arrow-downward"
               }
               size={16}
-              color="#0f172a"
+              color={colors.iconStrong}
             />
-            <Text className="text-xs font-semibold text-slate-800 ml-1">
+            <Text className="text-xs font-semibold text-slate-800 ml-1 dark:text-slate-200">
               {sort.direction === "asc" ? "Asc" : "Desc"}
             </Text>
           </Pressable>
@@ -243,7 +250,7 @@ export default function HomeScreen() {
 
       {loading ? (
         <View className="flex-1 items-center justify-center">
-          <ActivityIndicator size="large" color="#0f172a" />
+          <ActivityIndicator size="large" color={colors.accent} />
         </View>
       ) : (
         <FlashList
@@ -258,8 +265,8 @@ export default function HomeScreen() {
           onEndReachedThreshold={0.5}
           ListEmptyComponent={
             <View className="items-center mt-20">
-              <Feather name="users" size={32} color="#94a3b8" />
-              <Text className="text-slate-500 mt-2">
+              <Feather name="users" size={32} color={colors.iconMuted} />
+              <Text className="text-slate-500 mt-2 dark:text-slate-400">
                 No patients yet. Add one to get started.
               </Text>
             </View>
@@ -267,7 +274,7 @@ export default function HomeScreen() {
           ListFooterComponent={
             loadingMore ? (
               <View className="py-6">
-                <ActivityIndicator size="small" color="#0f172a" />
+                <ActivityIndicator size="small" color={colors.accent} />
               </View>
             ) : null
           }
@@ -275,12 +282,12 @@ export default function HomeScreen() {
       )}
 
       <Pressable
-        className="absolute right-6 bg-slate-900 h-14 w-14 rounded-full items-center justify-center shadow-lg"
+        className="absolute right-6 bg-slate-900 h-14 w-14 rounded-full items-center justify-center shadow-lg dark:bg-slate-100"
         style={{ bottom: fabBottomOffset }}
         onPress={() => router.push("/patient/add")}
         accessibilityLabel="Add patient"
       >
-        <Feather name="plus" size={26} color="white" />
+        <Feather name="plus" size={26} color={isDark ? "#0f172a" : "white"} />
       </Pressable>
     </SafeAreaView>
   );

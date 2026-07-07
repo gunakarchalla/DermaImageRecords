@@ -4,6 +4,8 @@ import type { ComponentProps } from "react";
 import { Alert, Linking, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { useThemeColors } from "../../../hooks/useThemeColors";
+
 const BUG_REPORT_EMAIL = "challa@gunakar.dev";
 
 type FeatherName = ComponentProps<typeof Feather>["name"];
@@ -19,6 +21,7 @@ type InfoItem = {
 
 export default function InfoMenuScreen() {
   const router = useRouter();
+  const colors = useThemeColors();
 
   const reportBug = async () => {
     const url = `mailto:${BUG_REPORT_EMAIL}?subject=${encodeURIComponent(
@@ -88,27 +91,27 @@ export default function InfoMenuScreen() {
   ];
 
   return (
-    <SafeAreaView className="flex-1 bg-slate-50">
+    <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950">
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
         {items.map((item) => (
           <Pressable
             key={item.key}
             accessibilityRole="button"
             onPress={() => (item.href ? router.push(item.href) : item.onPress?.())}
-            className="mb-3 flex-row items-center rounded-xl bg-white p-4 shadow-sm"
+            className="mb-3 flex-row items-center rounded-xl bg-white p-4 shadow-sm dark:bg-slate-900"
           >
-            <View className="h-11 w-11 items-center justify-center rounded-full bg-slate-100">
-              <Feather name={item.icon} size={20} color="#0f172a" />
+            <View className="h-11 w-11 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800">
+              <Feather name={item.icon} size={20} color={colors.iconStrong} />
             </View>
             <View className="ml-4 flex-1">
-              <Text className="text-base font-semibold text-slate-900">
+              <Text className="text-base font-semibold text-slate-900 dark:text-slate-100">
                 {item.label}
               </Text>
-              <Text className="mt-0.5 text-sm text-slate-500">
+              <Text className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
                 {item.description}
               </Text>
             </View>
-            <Feather name="chevron-right" size={20} color="#94a3b8" />
+            <Feather name="chevron-right" size={20} color={colors.iconMuted} />
           </Pressable>
         ))}
       </ScrollView>

@@ -14,7 +14,9 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { FlashList } from "@shopify/flash-list";
+import { useColorScheme } from "nativewind";
 
+import { useThemeColors } from "../../../hooks/useThemeColors";
 import { toRenderableImageUriAsync } from "../../../services/imageUri";
 import { consultationIndexService } from "../../../services/indexing/consultationIndexService";
 import {
@@ -34,6 +36,9 @@ const withCacheBuster = (uri: string, cacheKey: string) => {
 export default function PatientDetailsScreen() {
   const router = useRouter();
   const { patientId } = useLocalSearchParams<{ patientId: string }>();
+  const colors = useThemeColors();
+  const { colorScheme } = useColorScheme();
+  const isDark = colorScheme === "dark";
 
   const [patient, setPatient] = useState<Patient | null>(null);
   const [consultations, setConsultations] = useState<ConsultationIndexRow[]>(
@@ -279,14 +284,14 @@ export default function PatientDetailsScreen() {
       onPress={() =>
         router.push(`/patient/${patientId}/consultation/${item.id}`)
       }
-      className="bg-white rounded-xl p-3 mb-3 shadow-sm"
+      className="bg-white rounded-xl p-3 mb-3 shadow-sm dark:bg-slate-900"
     >
       <View className="flex-row items-center justify-between mb-1">
-        <Text className="text-base font-semibold text-slate-900">
+        <Text className="text-base font-semibold text-slate-900 dark:text-slate-100">
           Consultation
         </Text>
         <View className="flex-row items-center">
-          <Text className="text-xs text-slate-500">
+          <Text className="text-xs text-slate-500 dark:text-slate-400">
             {new Date(item.updatedAt).toLocaleDateString()}
           </Text>
           <Pressable
@@ -294,14 +299,14 @@ export default function PatientDetailsScreen() {
             onPress={() => confirmDeleteConsultation(item)}
             className="ml-3 p-2"
           >
-            <Feather name="trash-2" size={18} color="#e11d48" />
+            <Feather name="trash-2" size={18} color={colors.danger} />
           </Pressable>
         </View>
       </View>
-      <Text className="text-sm text-slate-700" numberOfLines={2}>
+      <Text className="text-sm text-slate-700 dark:text-slate-200" numberOfLines={2}>
         {item.remarks || "No remarks"}
       </Text>
-      <Text className="text-xs text-slate-400 mt-2">
+      <Text className="text-xs text-slate-400 mt-2 dark:text-slate-500">
         Photos: {item.photoCount}
       </Text>
     </Pressable>
@@ -309,23 +314,23 @@ export default function PatientDetailsScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-slate-50">
-        <ActivityIndicator size="large" color="#0f172a" />
+      <SafeAreaView className="flex-1 items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <ActivityIndicator size="large" color={colors.accent} />
       </SafeAreaView>
     );
   }
 
   if (!patient) {
     return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-slate-50">
-        <Text className="text-base text-slate-700">Patient not found.</Text>
+      <SafeAreaView className="flex-1 items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <Text className="text-base text-slate-700 dark:text-slate-200">Patient not found.</Text>
       </SafeAreaView>
     );
   }
 
   const header = (
     <View>
-      <View className="bg-white rounded-2xl p-4 shadow-sm mb-4">
+      <View className="bg-white rounded-2xl p-4 shadow-sm mb-4 dark:bg-slate-900">
         <View className="flex-row items-center mb-4">
           {profilePhotoDisplayUri ? (
             <Image
@@ -334,8 +339,8 @@ export default function PatientDetailsScreen() {
               contentFit="cover"
             />
           ) : (
-            <View className="h-20 w-20 rounded-full bg-slate-200 items-center justify-center">
-              <Feather name="user" size={32} color="#475569" />
+            <View className="h-20 w-20 rounded-full bg-slate-200 items-center justify-center dark:bg-slate-800">
+              <Feather name="user" size={32} color={colors.icon} />
             </View>
           )}
           <View className="ml-4 flex-1">
@@ -345,15 +350,16 @@ export default function PatientDetailsScreen() {
                 onChangeText={(text) =>
                   setForm((prev) => ({ ...prev, name: text }))
                 }
-                className="text-xl font-bold text-slate-900"
+                className="text-xl font-bold text-slate-900 dark:text-slate-100"
                 placeholder="Patient name"
+                placeholderTextColor={colors.placeholder}
               />
             ) : (
-              <Text className="text-xl font-bold text-slate-900">
+              <Text className="text-xl font-bold text-slate-900 dark:text-slate-100">
                 {patient.name}
               </Text>
             )}
-            <Text className="text-sm text-slate-500">
+            <Text className="text-sm text-slate-500 dark:text-slate-400">
               Last updated {new Date(patient.updatedAt).toLocaleString()}
             </Text>
           </View>
@@ -362,7 +368,7 @@ export default function PatientDetailsScreen() {
             className="p-2"
             accessibilityLabel="Edit patient"
           >
-            <Feather name="edit-2" size={20} color="#0f172a" />
+            <Feather name="edit-2" size={20} color={colors.iconStrong} />
           </Pressable>
         </View>
 
@@ -388,7 +394,7 @@ export default function PatientDetailsScreen() {
               },
             ].map((field) => (
               <View key={field.key} className="mb-3">
-                <Text className="text-sm text-slate-600 mb-1">
+                <Text className="text-sm text-slate-600 mb-1 dark:text-slate-400">
                   {field.label}
                 </Text>
                 <TextInput
@@ -397,15 +403,15 @@ export default function PatientDetailsScreen() {
                     setForm((prev) => ({ ...prev, [field.key]: text }))
                   }
                   placeholder="Optional"
-                  placeholderTextColor="#94a3b8"
-                  className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2"
+                  placeholderTextColor={colors.placeholder}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-900 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-100"
                   keyboardType={(field as any).keyboardType ?? "default"}
                 />
               </View>
             ))}
 
             <View className="mb-4">
-              <Text className="text-sm text-slate-600 mb-2">Gender</Text>
+              <Text className="text-sm text-slate-600 mb-2 dark:text-slate-400">Gender</Text>
               <View className="flex-row flex-wrap">
                 {(
                   [
@@ -422,15 +428,15 @@ export default function PatientDetailsScreen() {
                     }
                     className={`px-4 py-2 mr-2 mb-2 rounded-full border ${
                       form.gender === option.value
-                        ? "bg-slate-900 border-slate-900"
-                        : "border-slate-200"
+                        ? "bg-slate-900 border-slate-900 dark:bg-slate-100 dark:border-slate-100"
+                        : "border-slate-200 dark:border-slate-700"
                     }`}
                   >
                     <Text
                       className={`text-sm font-semibold ${
                         form.gender === option.value
-                          ? "text-white"
-                          : "text-slate-800"
+                          ? "text-white dark:text-slate-900"
+                          : "text-slate-800 dark:text-slate-200"
                       }`}
                     >
                       {option.label}
@@ -442,45 +448,45 @@ export default function PatientDetailsScreen() {
 
             <View className="flex-row mb-4">
               <Pressable
-                className="bg-slate-900 px-3 py-2 rounded-lg mr-3"
+                className="bg-slate-900 px-3 py-2 rounded-lg mr-3 dark:bg-slate-100"
                 onPress={() => requestPhoto(false)}
               >
-                <Text className="text-white font-semibold">Upload photo</Text>
+                <Text className="text-white font-semibold dark:text-slate-900">Upload photo</Text>
               </Pressable>
               <Pressable
-                className="border border-slate-300 px-3 py-2 rounded-lg"
+                className="border border-slate-300 px-3 py-2 rounded-lg dark:border-slate-700"
                 onPress={() => requestPhoto(true)}
               >
-                <Text className="text-slate-800 font-semibold">Camera</Text>
+                <Text className="text-slate-800 font-semibold dark:text-slate-200">Camera</Text>
               </Pressable>
             </View>
 
             <Pressable
-              className="bg-slate-900 rounded-xl py-3 items-center"
+              className="bg-slate-900 rounded-xl py-3 items-center dark:bg-slate-100"
               onPress={handleSave}
             >
-              <Text className="text-white font-semibold">Save</Text>
+              <Text className="text-white font-semibold dark:text-slate-900">Save</Text>
             </Pressable>
           </View>
         ) : (
           <View>
             {patient.emrNumber ? (
-              <Text className="text-base text-slate-700">
+              <Text className="text-base text-slate-700 dark:text-slate-200">
                 EMR: {patient.emrNumber}
               </Text>
             ) : null}
             {patient.age ? (
-              <Text className="text-base text-slate-700">
+              <Text className="text-base text-slate-700 dark:text-slate-200">
                 Age: {patient.age}
               </Text>
             ) : null}
             {patient.gender ? (
-              <Text className="text-base text-slate-700">
+              <Text className="text-base text-slate-700 dark:text-slate-200">
                 Gender: {patient.gender}
               </Text>
             ) : null}
             {patient.phone ? (
-              <Text className="text-base text-slate-700">
+              <Text className="text-base text-slate-700 dark:text-slate-200">
                 Phone: {patient.phone}
               </Text>
             ) : null}
@@ -489,22 +495,22 @@ export default function PatientDetailsScreen() {
       </View>
 
       <View className="flex-row items-center justify-between mb-2">
-        <Text className="text-lg font-semibold text-slate-900">
+        <Text className="text-lg font-semibold text-slate-900 dark:text-slate-100">
           Consultations
         </Text>
         <Pressable
           onPress={() => router.push(`/patient/${patientId}/consultation/add`)}
-          className="bg-slate-900 px-3 py-2 rounded-lg flex-row items-center"
+          className="bg-slate-900 px-3 py-2 rounded-lg flex-row items-center dark:bg-slate-100"
         >
-          <Feather name="plus" size={16} color="white" />
-          <Text className="text-white font-semibold ml-1">Add</Text>
+          <Feather name="plus" size={16} color={isDark ? "#0f172a" : "white"} />
+          <Text className="text-white font-semibold ml-1 dark:text-slate-900">Add</Text>
         </Pressable>
       </View>
     </View>
   );
 
   return (
-    <SafeAreaView className="flex-1 bg-slate-50">
+    <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950">
       <FlashList
         data={consultations}
         keyExtractor={(item) => item.id}
@@ -512,8 +518,8 @@ export default function PatientDetailsScreen() {
         contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
         ListHeaderComponent={header}
         ListEmptyComponent={
-          <View className="bg-white rounded-xl p-4 shadow-sm">
-            <Text className="text-slate-600">No consultations yet.</Text>
+          <View className="bg-white rounded-xl p-4 shadow-sm dark:bg-slate-900">
+            <Text className="text-slate-600 dark:text-slate-300">No consultations yet.</Text>
           </View>
         }
         onEndReached={loadMoreConsultations}
@@ -521,7 +527,7 @@ export default function PatientDetailsScreen() {
         ListFooterComponent={
           loadingMore ? (
             <View className="py-6">
-              <ActivityIndicator size="small" color="#0f172a" />
+              <ActivityIndicator size="small" color={colors.accent} />
             </View>
           ) : null
         }

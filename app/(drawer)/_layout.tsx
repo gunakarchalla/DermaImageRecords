@@ -1,16 +1,22 @@
 import { Feather } from "@expo/vector-icons";
 import { Drawer } from "expo-router/drawer";
 
+import { useThemeColors } from "../../hooks/useThemeColors";
+
 export default function DrawerLayout() {
+  const colors = useThemeColors();
+
   return (
     <Drawer
       screenOptions={{
-        headerStyle: { backgroundColor: "#0f172a" },
-        headerTintColor: "white",
+        headerStyle: { backgroundColor: colors.headerBackground },
+        headerTintColor: colors.headerTint,
         headerTitleStyle: { fontWeight: "600" },
-        drawerActiveTintColor: "#0f172a",
-        drawerInactiveTintColor: "#475569",
-        drawerActiveBackgroundColor: "#e2e8f0",
+        sceneStyle: { backgroundColor: colors.background },
+        drawerStyle: { backgroundColor: colors.drawerBackground },
+        drawerActiveTintColor: colors.drawerActiveTint,
+        drawerInactiveTintColor: colors.drawerInactiveTint,
+        drawerActiveBackgroundColor: colors.drawerActiveBackground,
       }}
     >
       <Drawer.Screen

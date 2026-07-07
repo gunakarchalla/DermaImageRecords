@@ -5,6 +5,8 @@ import type { ComponentProps } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { useThemeColors } from "../../../hooks/useThemeColors";
+
 type FeatherName = ComponentProps<typeof Feather>["name"];
 
 const FEATURES: { icon: FeatherName; text: string }[] = [
@@ -19,9 +21,10 @@ const FEATURES: { icon: FeatherName; text: string }[] = [
 
 export default function AboutScreen() {
   const version = Constants.expoConfig?.version ?? "1.0.0";
+  const colors = useThemeColors();
 
   return (
-    <SafeAreaView className="flex-1 bg-slate-50">
+    <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950">
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
         <View className="items-center">
           <Image
@@ -29,41 +32,41 @@ export default function AboutScreen() {
             className="h-20 w-20 rounded-2xl"
             contentFit="cover"
           />
-          <Text className="mt-3 text-2xl font-bold text-slate-900">
+          <Text className="mt-3 text-2xl font-bold text-slate-900 dark:text-slate-100">
             DermaImageRecords
           </Text>
-          <Text className="mt-1 text-sm text-slate-500">Version {version}</Text>
+          <Text className="mt-1 text-sm text-slate-500 dark:text-slate-400">Version {version}</Text>
         </View>
 
-        <Text className="mt-6 text-base font-semibold text-slate-900">
+        <Text className="mt-6 text-base font-semibold text-slate-900 dark:text-slate-100">
           A clinical imaging companion for dermatologists.
         </Text>
 
-        <Text className="mt-3 text-base leading-6 text-slate-600">
+        <Text className="mt-3 text-base leading-6 text-slate-600 dark:text-slate-300">
           DermaImageRecords helps dermatologists capture, organize, and revisit
           clinical images from patient consultations.
         </Text>
-        <Text className="mt-3 text-base leading-6 text-slate-600">
+        <Text className="mt-3 text-base leading-6 text-slate-600 dark:text-slate-300">
           During a consultation you can photograph skin findings directly in the
           app and keep them grouped under the right patient and visit — building
           a structured visual record that grows over time.
         </Text>
-        <Text className="mt-3 text-base leading-6 text-slate-600">
+        <Text className="mt-3 text-base leading-6 text-slate-600 dark:text-slate-300">
           Because skin conditions evolve, the app makes it easy to compare images
           across consultations, so you can track how a condition changes between
           visits and assess the response to treatment.
         </Text>
 
-        <View className="mt-6 rounded-xl bg-white p-4 shadow-sm">
+        <View className="mt-6 rounded-xl bg-white p-4 shadow-sm dark:bg-slate-900">
           {FEATURES.map((feature, index) => (
             <View
               key={feature.text}
               className={`flex-row items-center ${index > 0 ? "mt-4" : ""}`}
             >
-              <View className="h-9 w-9 items-center justify-center rounded-full bg-slate-100">
-                <Feather name={feature.icon} size={18} color="#0f172a" />
+              <View className="h-9 w-9 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800">
+                <Feather name={feature.icon} size={18} color={colors.iconStrong} />
               </View>
-              <Text className="ml-3 flex-1 text-base text-slate-700">
+              <Text className="ml-3 flex-1 text-base text-slate-700 dark:text-slate-200">
                 {feature.text}
               </Text>
             </View>

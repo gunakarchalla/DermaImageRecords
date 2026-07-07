@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { useThemeColors } from "../../../../hooks/useThemeColors";
 import { consumeConsultationCaptureQueue } from "../../../../services/consultationCaptureHandoff";
 import { toRenderableImageUriAsync } from "../../../../services/imageUri";
 import {
@@ -23,6 +24,7 @@ import {
 
 export default function AddConsultationScreen() {
   const router = useRouter();
+  const colors = useThemeColors();
   const { patientId, consultationId } = useLocalSearchParams<{
     patientId: string;
     consultationId?: string;
@@ -172,13 +174,13 @@ export default function AddConsultationScreen() {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-slate-50">
+    <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950">
       <ScrollView
         className="flex-1"
         contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
       >
         <View className="flex-row items-center justify-between mb-4">
-          <Text className="text-2xl font-bold text-slate-900">
+          <Text className="text-2xl font-bold text-slate-900 dark:text-slate-100">
             {consultationId ? "Edit" : "Add"} Consultation
           </Text>
           <Pressable
@@ -186,18 +188,18 @@ export default function AddConsultationScreen() {
             className="p-2"
             accessibilityLabel="Cancel"
           >
-            <Feather name="x" size={24} color="#0f172a" />
+            <Feather name="x" size={24} color={colors.iconStrong} />
           </Pressable>
         </View>
 
         <View className="mb-4">
-          <Text className="text-sm text-slate-600 mb-2">Remarks</Text>
+          <Text className="text-sm text-slate-600 mb-2 dark:text-slate-400">Remarks</Text>
           <TextInput
             value={remarks}
             onChangeText={setRemarks}
             placeholder="Enter consultation notes"
-            placeholderTextColor="#94a3b8"
-            className="bg-white rounded-xl border border-slate-200 px-3 py-3 text-base"
+            placeholderTextColor={colors.placeholder}
+            className="bg-white rounded-xl border border-slate-200 px-3 py-3 text-base text-slate-900 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-100"
             multiline
             numberOfLines={4}
           />
@@ -205,25 +207,25 @@ export default function AddConsultationScreen() {
 
         <View className="mb-4">
           <View className="flex-row items-center justify-between mb-2">
-            <Text className="text-sm text-slate-600">Photos</Text>
+            <Text className="text-sm text-slate-600 dark:text-slate-400">Photos</Text>
             <View className="flex-row">
               <Pressable
-                className={`bg-slate-900 px-3 py-2 rounded-lg mr-2 ${
+                className={`bg-slate-900 px-3 py-2 rounded-lg mr-2 dark:bg-slate-100 ${
                   pickingImage || loading ? "opacity-60" : ""
                 }`}
                 disabled={pickingImage || loading}
                 onPress={addPhotoFromLibrary}
               >
-                <Text className="text-white font-semibold">Upload</Text>
+                <Text className="text-white font-semibold dark:text-slate-900">Upload</Text>
               </Pressable>
               <Pressable
-                className={`border border-slate-300 px-3 py-2 rounded-lg ${
+                className={`border border-slate-300 px-3 py-2 rounded-lg dark:border-slate-700 ${
                   pickingImage || loading ? "opacity-60" : ""
                 }`}
                 disabled={pickingImage || loading}
                 onPress={openCameraPreview}
               >
-                <Text className="text-slate-800 font-semibold">Camera</Text>
+                <Text className="text-slate-800 font-semibold dark:text-slate-200">Camera</Text>
               </Pressable>
             </View>
           </View>
@@ -240,7 +242,7 @@ export default function AddConsultationScreen() {
                   onPress={() =>
                     setPhotos((prev) => prev.filter((p) => p !== uri))
                   }
-                  className="absolute -top-2 -right-2 bg-white rounded-full p-1 shadow"
+                  className="absolute -top-2 -right-2 bg-white rounded-full p-1 shadow dark:bg-slate-200"
                   accessibilityLabel="Remove photo"
                 >
                   <Feather name="x" size={14} color="#0f172a" />
@@ -253,9 +255,9 @@ export default function AddConsultationScreen() {
         <Pressable
           disabled={loading}
           onPress={handleSave}
-          className={`bg-slate-900 rounded-xl py-3 items-center ${loading ? "opacity-70" : ""}`}
+          className={`bg-slate-900 rounded-xl py-3 items-center dark:bg-slate-100 ${loading ? "opacity-70" : ""}`}
         >
-          <Text className="text-white text-base font-semibold">Save</Text>
+          <Text className="text-white text-base font-semibold dark:text-slate-900">Save</Text>
         </Pressable>
       </ScrollView>
     </SafeAreaView>

@@ -26,34 +26,34 @@ const SECTIONS: { title: string; body: string }[] = [
 
 export default function LicenseScreen() {
   return (
-    <SafeAreaView className="flex-1 bg-slate-50">
+    <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950">
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
-        <Text className="text-lg font-bold text-slate-900">
+        <Text className="text-lg font-bold text-slate-900 dark:text-slate-100">
           DermaImageRecords — Commercial License
         </Text>
-        <Text className="mt-1 text-sm text-slate-500">
+        <Text className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           Copyright © 2026 Nikhil Mehta and Gunakar Challa. All rights reserved.
         </Text>
 
-        <Text className="mt-4 text-base leading-6 text-slate-600">
+        <Text className="mt-4 text-base leading-6 text-slate-600 dark:text-slate-300">
           DermaImageRecords is proprietary, commercial software. Your use of the
           app is governed by the terms below.
         </Text>
 
-        <View className="mt-4 rounded-xl bg-white p-4 shadow-sm">
+        <View className="mt-4 rounded-xl bg-white p-4 shadow-sm dark:bg-slate-900">
           {SECTIONS.map((section, index) => (
             <View key={section.title} className={index > 0 ? "mt-4" : ""}>
-              <Text className="text-base font-semibold text-slate-900">
+              <Text className="text-base font-semibold text-slate-900 dark:text-slate-100">
                 {section.title}
               </Text>
-              <Text className="mt-1 text-base leading-6 text-slate-600">
+              <Text className="mt-1 text-base leading-6 text-slate-600 dark:text-slate-300">
                 {section.body}
               </Text>
             </View>
           ))}
         </View>
 
-        <Text className="mt-4 text-xs leading-5 text-slate-400">
+        <Text className="mt-4 text-xs leading-5 text-slate-400 dark:text-slate-500">
           Unauthorized copying, distribution, or use of this software or its
           source code is strictly prohibited.
         </Text>

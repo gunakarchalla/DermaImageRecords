@@ -13,12 +13,14 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { useThemeColors } from "../../hooks/useThemeColors";
 import { toRenderableImageUriAsync } from "../../services/imageUri";
 import { savePatient } from "../../services/storage/storage";
 import { Gender } from "../../types/models";
 
 export default function AddPatientScreen() {
   const router = useRouter();
+  const colors = useThemeColors();
   const [name, setName] = useState("");
   const [emrNumber, setEmrNumber] = useState("");
   const [age, setAge] = useState("");
@@ -105,15 +107,15 @@ export default function AddPatientScreen() {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-slate-50">
+    <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950">
       <View className="flex-row items-center justify-between px-4 pt-4 pb-2">
-        <Text className="text-2xl font-bold text-slate-900">Add Patient</Text>
+        <Text className="text-2xl font-bold text-slate-900 dark:text-slate-100">Add Patient</Text>
         <Pressable
           onPress={() => router.back()}
           className="p-2"
           accessibilityLabel="Cancel"
         >
-          <Feather name="x" size={24} color="#0f172a" />
+          <Feather name="x" size={24} color={colors.iconStrong} />
         </Pressable>
       </View>
 
@@ -121,7 +123,7 @@ export default function AddPatientScreen() {
         className="flex-1 px-4"
         contentContainerStyle={{ paddingBottom: 48 }}
       >
-        <Text className="text-sm text-slate-600 mb-2">Profile photo</Text>
+        <Text className="text-sm text-slate-600 mb-2 dark:text-slate-400">Profile photo</Text>
         <View className="flex-row items-center mb-4">
           {profilePhotoDisplayUri ? (
             <Image
@@ -130,22 +132,22 @@ export default function AddPatientScreen() {
               contentFit="cover"
             />
           ) : (
-            <View className="h-20 w-20 rounded-full bg-slate-200 items-center justify-center">
-              <Feather name="user" size={28} color="#475569" />
+            <View className="h-20 w-20 rounded-full bg-slate-200 items-center justify-center dark:bg-slate-800">
+              <Feather name="user" size={28} color={colors.icon} />
             </View>
           )}
           <View className="ml-4 flex-row">
             <Pressable
-              className="bg-slate-900 px-3 py-2 rounded-lg mr-3"
+              className="bg-slate-900 px-3 py-2 rounded-lg mr-3 dark:bg-slate-100"
               onPress={() => requestPhoto(false)}
             >
-              <Text className="text-white font-semibold">Upload</Text>
+              <Text className="text-white font-semibold dark:text-slate-900">Upload</Text>
             </Pressable>
             <Pressable
-              className="border border-slate-300 px-3 py-2 rounded-lg"
+              className="border border-slate-300 px-3 py-2 rounded-lg dark:border-slate-700"
               onPress={() => requestPhoto(true)}
             >
-              <Text className="text-slate-800 font-semibold">Camera</Text>
+              <Text className="text-slate-800 font-semibold dark:text-slate-200">Camera</Text>
             </Pressable>
           </View>
         </View>
@@ -179,20 +181,20 @@ export default function AddPatientScreen() {
           },
         ].map((field) => (
           <View key={field.label} className="mb-4">
-            <Text className="text-sm text-slate-600 mb-1">{field.label}</Text>
+            <Text className="text-sm text-slate-600 mb-1 dark:text-slate-400">{field.label}</Text>
             <TextInput
               value={field.value}
               onChangeText={field.onChange}
               placeholder={field.placeholder}
-              placeholderTextColor="#94a3b8"
-              className="bg-white rounded-xl border border-slate-200 px-3 py-2 text-base"
+              placeholderTextColor={colors.placeholder}
+              className="bg-white rounded-xl border border-slate-200 px-3 py-2 text-base text-slate-900 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-100"
               keyboardType={(field as any).keyboardType ?? "default"}
             />
           </View>
         ))}
 
         <View className="mb-6">
-          <Text className="text-sm text-slate-600 mb-2">Gender</Text>
+          <Text className="text-sm text-slate-600 mb-2 dark:text-slate-400">Gender</Text>
           <View className="flex-row flex-wrap">
             {(
               [
@@ -207,12 +209,16 @@ export default function AddPatientScreen() {
                 onPress={() => setGender(option.value)}
                 className={`px-4 py-2 mr-2 mb-2 rounded-full border ${
                   gender === option.value
-                    ? "bg-slate-900 border-slate-900"
-                    : "border-slate-200"
+                    ? "bg-slate-900 border-slate-900 dark:bg-slate-100 dark:border-slate-100"
+                    : "border-slate-200 dark:border-slate-700"
                 }`}
               >
                 <Text
-                  className={`text-sm font-semibold ${gender === option.value ? "text-white" : "text-slate-800"}`}
+                  className={`text-sm font-semibold ${
+                    gender === option.value
+                      ? "text-white dark:text-slate-900"
+                      : "text-slate-800 dark:text-slate-200"
+                  }`}
                 >
                   {option.label}
                 </Text>
@@ -224,9 +230,9 @@ export default function AddPatientScreen() {
         <Pressable
           disabled={saving}
           onPress={handleSave}
-          className={`bg-slate-900 rounded-xl py-3 items-center ${saving ? "opacity-70" : ""}`}
+          className={`bg-slate-900 rounded-xl py-3 items-center dark:bg-slate-100 ${saving ? "opacity-70" : ""}`}
         >
-          <Text className="text-white text-base font-semibold">Next</Text>
+          <Text className="text-white text-base font-semibold dark:text-slate-900">Next</Text>
         </Pressable>
       </ScrollView>
     </SafeAreaView>

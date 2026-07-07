@@ -24,30 +24,30 @@ const SECTIONS: { title: string; body: string }[] = [
 
 export default function PrivacyPolicyScreen() {
   return (
-    <SafeAreaView className="flex-1 bg-slate-50">
+    <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950">
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
-        <Text className="text-sm text-slate-500">Last updated: 7 July 2026</Text>
+        <Text className="text-sm text-slate-500 dark:text-slate-400">Last updated: 7 July 2026</Text>
 
-        <Text className="mt-3 text-base leading-6 text-slate-600">
+        <Text className="mt-3 text-base leading-6 text-slate-600 dark:text-slate-300">
           Your privacy — and your patients&apos; privacy — matters to us. This
           policy explains what we collect and, just as importantly, what we
           don&apos;t.
         </Text>
 
-        <View className="mt-4 rounded-xl bg-white p-4 shadow-sm">
+        <View className="mt-4 rounded-xl bg-white p-4 shadow-sm dark:bg-slate-900">
           {SECTIONS.map((section, index) => (
             <View key={section.title} className={index > 0 ? "mt-4" : ""}>
-              <Text className="text-base font-semibold text-slate-900">
+              <Text className="text-base font-semibold text-slate-900 dark:text-slate-100">
                 {section.title}
               </Text>
-              <Text className="mt-1 text-base leading-6 text-slate-600">
+              <Text className="mt-1 text-base leading-6 text-slate-600 dark:text-slate-300">
                 {section.body}
               </Text>
             </View>
           ))}
         </View>
 
-        <Text className="mt-4 text-base leading-6 text-slate-600">
+        <Text className="mt-4 text-base leading-6 text-slate-600 dark:text-slate-300">
           Questions about this policy? Email{" "}
           <Text
             className="font-semibold text-[#0A66C2]"
