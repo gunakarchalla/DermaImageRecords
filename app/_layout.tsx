@@ -4,13 +4,9 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { useThemeColors } from "../hooks/useThemeColors";
-import { installGlobalFontScaling } from "../services/preferences/fontScaling";
 import { SettingsProvider } from "../services/preferences/SettingsProvider";
 import "../services/nativewindInterop";
 import "./global.css";
-
-// Patch <Text>/<TextInput> once so the in-app font-size setting scales all text.
-installGlobalFontScaling();
 
 function RootNavigator() {
   // useThemeColors subscribes to the color scheme, so this restyles on toggle.
