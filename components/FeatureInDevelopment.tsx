@@ -6,8 +6,8 @@ type FeatureInDevelopmentProps = {
 };
 
 /**
- * Placeholder shown for drawer destinations that are not built yet
- * (Settings, Account, Import/Export, About).
+ * Placeholder shown for destinations that are not built yet
+ * (Settings, Account, Import/Export, UI/UX Guide).
  */
 export function FeatureInDevelopment({ title }: FeatureInDevelopmentProps) {
   return (

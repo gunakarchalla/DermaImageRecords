@@ -51,9 +51,12 @@ export default function DrawerLayout() {
         }}
       />
       <Drawer.Screen
-        name="about"
+        name="info"
         options={{
-          title: "About",
+          title: "Info",
+          // The nested Stack in app/(drawer)/info renders its own headers
+          // (menu + back buttons), so suppress the drawer's header here.
+          headerShown: false,
           drawerIcon: ({ color, size }) => (
             <Feather name="info" size={size} color={color} />
           ),
