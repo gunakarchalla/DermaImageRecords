@@ -9,7 +9,6 @@ import {
   FlatList,
   GestureResponderEvent,
   Pressable,
-  Image as RNImage,
   Text,
   useWindowDimensions,
   View,
@@ -195,6 +194,10 @@ export default function ConsultationPhotosScreen() {
     width: number;
     height: number;
   } | null>(null);
+  // Renderable file:// URI the crop was measured against; manipulation must use
+  // the same source so pixel coordinates map 1:1 (content:// URIs are unreliable
+  // for RNImage.getSize and can decode at a downscaled size on Android).
+  const [cropSourceUri, setCropSourceUri] = useState<string | null>(null);
 
   const photoViewerHeight = Math.max(220, height - 180);
   const cropCanvasWidth = Math.max(100, width - 24);
@@ -205,16 +208,6 @@ export default function ConsultationPhotosScreen() {
     Math.max(min, Math.min(max, value));
 
   const currentPhotoUri = consultation?.photoUris?.[activeIndex];
-
-  const getImageDimensionsAsync = async (uri: string) =>
-    new Promise<{ width: number; height: number }>((resolve, reject) => {
-      RNImage.getSize(
-        uri,
-        (imgWidth, imgHeight) =>
-          resolve({ width: imgWidth, height: imgHeight }),
-        reject,
-      );
-    });
 
   const cropImageFrame = useMemo(() => {
     if (!cropImageSize) return null;
@@ -354,14 +347,33 @@ export default function ConsultationPhotosScreen() {
     setIsCropping(false);
     setCropRect(null);
     setCropImageSize(null);
+    setCropSourceUri(null);
   }, []);
 
   const beginCropMode = useCallback(async () => {
     if (!currentPhotoUri) return;
 
     try {
-      const imageSize = await getImageDimensionsAsync(currentPhotoUri);
+      const renderableUri =
+        displayUris[currentPhotoUri] ??
+        (await toRenderableImageUriAsync(currentPhotoUri)) ??
+        currentPhotoUri;
+
+      // Normalize EXIF orientation up front by running a no-op ImageManipulator pass.
+      // Freshly captured photos carry an EXIF orientation flag: expo-image and
+      // ImageManipulator apply it (showing the oriented image), but RNImage.getSize
+      // reports the raw un-oriented pixel dimensions. That mismatch made the very
+      // first crop map to the wrong region. The normalized output has identity
+      // orientation, and its reported width/height are the authoritative oriented
+      // pixel dimensions — so measuring and cropping against it always agree.
+      const normalized = await ImageManipulator.manipulateAsync(renderableUri, [], {
+        compress: 1,
+        format: ImageManipulator.SaveFormat.JPEG,
+      });
+
+      const imageSize = { width: normalized.width, height: normalized.height };
       setCropImageSize(imageSize);
+      setCropSourceUri(normalized.uri);
 
       const imageAspect = imageSize.width / imageSize.height;
       const canvasAspect = cropCanvasWidth / cropCanvasHeight;
@@ -397,7 +409,7 @@ export default function ConsultationPhotosScreen() {
         "Could not load this image for cropping.",
       );
     }
-  }, [cropCanvasHeight, cropCanvasWidth, currentPhotoUri]);
+  }, [cropCanvasHeight, cropCanvasWidth, currentPhotoUri, displayUris]);
 
   const updateCropRectByMove = useCallback(
     (dx: number, dy: number) => {
@@ -499,7 +511,8 @@ export default function ConsultationPhotosScreen() {
       !currentPhotoUri ||
       !cropRect ||
       !cropImageFrame ||
-      !cropImageSize
+      !cropImageSize ||
+      !cropSourceUri
     ) {
       return;
     }
@@ -531,7 +544,7 @@ export default function ConsultationPhotosScreen() {
       );
 
       const result = await ImageManipulator.manipulateAsync(
-        currentPhotoUri,
+        cropSourceUri,
         [
           {
             crop: {
@@ -561,6 +574,7 @@ export default function ConsultationPhotosScreen() {
     cropImageFrame,
     cropImageSize,
     cropRect,
+    cropSourceUri,
     currentPhotoUri,
     discardCropMode,
     updateConsultationPhotos,
