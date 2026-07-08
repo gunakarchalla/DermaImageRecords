@@ -21,10 +21,9 @@ export type ThemeColors = {
     // React Navigation chrome.
     headerBackground: string;
     headerTint: string;
-    drawerBackground: string;
-    drawerActiveTint: string;
-    drawerInactiveTint: string;
-    drawerActiveBackground: string;
+    tabBarBackground: string;
+    tabBarActiveTint: string;
+    tabBarInactiveTint: string;
 };
 
 const lightColors: ThemeColors = {
@@ -39,10 +38,9 @@ const lightColors: ThemeColors = {
     border: "#e2e8f0", // slate-200
     headerBackground: "#0f172a",
     headerTint: "#ffffff",
-    drawerBackground: "#ffffff",
-    drawerActiveTint: "#0f172a",
-    drawerInactiveTint: "#475569",
-    drawerActiveBackground: "#e2e8f0",
+    tabBarBackground: "#ffffff",
+    tabBarActiveTint: "#0f172a",
+    tabBarInactiveTint: "#94a3b8", // slate-400
 };
 
 const darkColors: ThemeColors = {
@@ -57,10 +55,9 @@ const darkColors: ThemeColors = {
     border: "#1e293b", // slate-800
     headerBackground: "#0f172a",
     headerTint: "#ffffff",
-    drawerBackground: "#0f172a",
-    drawerActiveTint: "#ffffff",
-    drawerInactiveTint: "#94a3b8",
-    drawerActiveBackground: "#1e293b",
+    tabBarBackground: "#0f172a", // slate-900
+    tabBarActiveTint: "#ffffff",
+    tabBarInactiveTint: "#64748b", // slate-500
 };
 
 export const useThemeColors = (): ThemeColors => {

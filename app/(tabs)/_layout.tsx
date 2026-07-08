@@ -1,73 +1,76 @@
 import { Feather } from "@expo/vector-icons";
-import { Drawer } from "expo-router/drawer";
+import { Tabs } from "expo-router";
 
 import { useThemeColors } from "../../hooks/useThemeColors";
 
-export default function DrawerLayout() {
+export default function TabsLayout() {
   const colors = useThemeColors();
 
   return (
-    <Drawer
+    <Tabs
       screenOptions={{
         headerStyle: { backgroundColor: colors.headerBackground },
         headerTintColor: colors.headerTint,
         headerTitleStyle: { fontWeight: "600" },
         sceneStyle: { backgroundColor: colors.background },
-        drawerStyle: { backgroundColor: colors.drawerBackground },
-        drawerActiveTintColor: colors.drawerActiveTint,
-        drawerInactiveTintColor: colors.drawerInactiveTint,
-        drawerActiveBackgroundColor: colors.drawerActiveBackground,
+        tabBarStyle: {
+          backgroundColor: colors.tabBarBackground,
+          borderTopColor: colors.border,
+        },
+        tabBarActiveTintColor: colors.tabBarActiveTint,
+        tabBarInactiveTintColor: colors.tabBarInactiveTint,
       }}
     >
-      <Drawer.Screen
+      <Tabs.Screen
         name="index"
         options={{
           title: "Patients",
-          drawerLabel: "Home",
-          drawerIcon: ({ color, size }) => (
+          tabBarLabel: "Home",
+          tabBarIcon: ({ color, size }) => (
             <Feather name="home" size={size} color={color} />
           ),
         }}
       />
-      <Drawer.Screen
+      <Tabs.Screen
         name="settings"
         options={{
           title: "Settings",
-          drawerIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }) => (
             <Feather name="settings" size={size} color={color} />
           ),
         }}
       />
-      <Drawer.Screen
+      <Tabs.Screen
         name="account"
         options={{
           title: "Account",
-          drawerIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }) => (
             <Feather name="user" size={size} color={color} />
           ),
         }}
       />
-      <Drawer.Screen
+      <Tabs.Screen
         name="import-export"
         options={{
           title: "Import / Export",
-          drawerIcon: ({ color, size }) => (
+          tabBarLabel: "Transfer",
+          tabBarIcon: ({ color, size }) => (
             <Feather name="repeat" size={size} color={color} />
           ),
         }}
       />
-      <Drawer.Screen
+      <Tabs.Screen
         name="info"
         options={{
           title: "Info",
-          // The nested Stack in app/(drawer)/info renders its own headers
-          // (menu + back buttons), so suppress the drawer's header here.
+          // The nested Stack in app/(tabs)/info renders its own headers
+          // (back buttons), so suppress the tab navigator's header here.
           headerShown: false,
-          drawerIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }) => (
             <Feather name="info" size={size} color={color} />
           ),
         }}
       />
-    </Drawer>
+    </Tabs>
   );
 }

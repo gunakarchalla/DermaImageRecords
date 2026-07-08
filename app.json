@@ -20,7 +20,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.DermaImageRecords"
+      "package": "com.dermaimagerecords.dermaimagerecords"
     },
     "web": {
       "output": "static",
@@ -41,7 +41,8 @@
           }
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      "@react-native-google-signin/google-signin"
     ],
     "experiments": {
       "typedRoutes": true,
@@ -51,7 +52,11 @@
       "router": {},
       "eas": {
         "projectId": "1262cd3c-e2c8-4428-b6f7-ffe08c7730fa"
-      }
+      },
+      "supabaseUrl": "https://ehryrcsdgibnjnmddyrm.supabase.co",
+      "supabaseAnonKey": "sb_publishable_jXMZmRbVYrpY2Pw6qB10UQ_lWbfZfZI",
+      "googleWebClientId": "541186667754-0294gm2i37l78bdd944avj9ujct7qn91.apps.googleusercontent.com",
+      "googleAndroidClientId": "541186667754-r7tg9csduqn5vcan12i8n14vn6mj234s.apps.googleusercontent.com"
     },
     "owner": "gunakar-challa"
   }

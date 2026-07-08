@@ -1,12 +1,11 @@
-import { DrawerToggleButton } from "@react-navigation/drawer";
 import { Stack } from "expo-router";
 
 import { useThemeColors } from "../../../hooks/useThemeColors";
 
 /**
- * Nested stack for the "Info" drawer destination. The index screen is the
- * section menu (with a drawer toggle); every other screen is pushed on top
- * with a standard back button.
+ * Nested stack for the "Info" tab destination. The index screen is the
+ * section menu; every other screen is pushed on top with a standard back
+ * button.
  */
 export default function InfoLayout() {
   const colors = useThemeColors();
@@ -24,7 +23,6 @@ export default function InfoLayout() {
         name="index"
         options={{
           title: "Info",
-          headerLeft: () => <DrawerToggleButton tintColor={colors.headerTint} />,
         }}
       />
       <Stack.Screen name="about" options={{ title: "About" }} />
