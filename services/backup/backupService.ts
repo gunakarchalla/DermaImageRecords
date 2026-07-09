@@ -3,15 +3,25 @@ import { Directory, File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { strFromU8, unzipSync, Zip, ZipPassThrough } from "fflate";
 
+import { BACKUP } from "../../constants/backup";
 import { STORAGE } from "../../constants/storage";
 import type { Consultation, Patient } from "../../types/models";
-import { DriveAccessError, ensureDriveAccessTokenAsync, uploadLatestBackupAsync } from "./googleDrive";
+import {
+    downloadBackupAsync,
+    DriveAccessError,
+    ensureDriveAccessTokenAsync,
+    findLatestBackupAsync,
+    uploadLatestBackupAsync,
+} from "./googleDrive";
+import { bumpDatasetRevision } from "../datasetRevision";
 import { clearImageCacheAsync } from "../imageUri";
+import { consultationIndexService } from "../indexing/consultationIndexService";
 import { patientIndexService } from "../indexing/patientIndexService";
 import {
     getOrCreateChildDirectoryAsync,
     listEntriesSafe,
     replaceFileInDirectoryAsync,
+    safeDeleteDir,
     writeJsonToDir,
 } from "../storage/fsUtils";
 import {
@@ -22,22 +32,26 @@ import {
 } from "../storage/roots";
 
 /**
- * Import / export the entire dataset as a single `.zip`.
+ * Import / export / restore the entire dataset as a single `.zip`.
  *
  * The filesystem is the source of truth (see CLAUDE.md), so a faithful copy of the
  * dataset-root tree is a complete backup. The SQLite index is never included — it is
  * rebuilt from disk after an import.
  *
  * Export streams the dataset tree into an in-memory zip (STORE, since JPEGs are already
- * compressed) and hands it to the OS share sheet. Import unzips a chosen file, merges its
- * patient folders into the existing dataset using a **skip-existing** policy, rewrites the
- * stored image URIs to their new on-device locations, and rebuilds the index.
+ * compressed) and hands it to the OS share sheet. Import unzips a chosen file and merges its
+ * patient folders into the existing dataset; restore does the same with the archive pulled
+ * from the user's Google Drive. Both rewrite the stored image URIs to their new on-device
+ * locations and rebuild the index, and both resolve id collisions with a caller-chosen
+ * `ConflictPolicy`.
  */
 
 export type BackupPhase =
     | "scanning"
     | "archiving"
     | "uploading"
+    | "searching"
+    | "downloading"
     | "reading"
     | "extracting"
     | "indexing";
@@ -48,13 +62,30 @@ export type BackupProgress = {
     total: number;
 };
 
+/**
+ * What to do with an incoming patient whose id already exists on this device.
+ * `skip` leaves the local record untouched; `replace` discards it in favour of the archive's.
+ */
+export type ConflictPolicy = "skip" | "replace";
+
 export type ImportSummary = {
+    /** Patients that did not exist locally. */
     imported: number;
+    /** Existing patients overwritten under the `replace` policy. */
+    replaced: number;
+    /** Existing patients left alone under the `skip` policy. */
     skipped: number;
     invalid: number;
 };
 
 export type ImportResult = ({ cancelled: false } & ImportSummary) | { cancelled: true };
+
+export type RestoreResult = ImportSummary & {
+    /** The Drive file the records came from — adopt it as the keep-latest backup target. */
+    fileId: string;
+    /** When that backup was last written, for the "restored from …" confirmation. */
+    modifiedTime: string | null;
+};
 
 /** Thrown when the dataset holds nothing to archive. Retrying can't help until records exist. */
 export class EmptyDatasetError extends Error {
@@ -63,6 +94,43 @@ export class EmptyDatasetError extends Error {
         this.name = "EmptyDatasetError";
     }
 }
+
+/** Thrown when the signed-in account has no backup archive in Drive. Not a failure — an answer. */
+export class NoCloudBackupError extends Error {
+    constructor() {
+        super("No backup was found in your Google Drive.");
+        this.name = "NoCloudBackupError";
+    }
+}
+
+/** Human-readable status for a running backup/import/restore, shared by every progress overlay. */
+export const describeBackupProgress = (progress: BackupProgress | null): string => {
+    if (!progress) return "Working…";
+    switch (progress.phase) {
+        case "scanning":
+            return "Scanning records…";
+        case "archiving":
+            return progress.total
+                ? `Archiving ${progress.current} of ${progress.total}…`
+                : "Archiving…";
+        case "uploading":
+            return "Uploading to Google Drive…";
+        case "searching":
+            return "Looking for a backup…";
+        case "downloading":
+            return "Downloading backup…";
+        case "reading":
+            return "Reading file…";
+        case "extracting":
+            return progress.total
+                ? `Importing ${progress.current} of ${progress.total}…`
+                : "Importing…";
+        case "indexing":
+            return "Rebuilding index…";
+        default:
+            return "Working…";
+    }
+};
 
 /**
  * Whether repeating a failed backup unattended could plausibly succeed. Drives the automatic
@@ -429,30 +497,28 @@ const importSinglePatientAsync = async (
     await writeJsonToDir(patientDir, STORAGE.patientFileName, patient);
 };
 
-export const importDatasetAsync = async (onProgress?: ProgressFn): Promise<ImportResult> => {
-    await initStorageAsync();
-
-    onProgress?.({ phase: "reading", current: 0, total: 0 });
-
-    const pickedUri = await pickBackupFileAsync();
-    if (!pickedUri) return { cancelled: true };
-
-    let zipBytes: Uint8Array;
+/**
+ * NOTE: unzipSync holds the decompressed payload in memory. Since exports use STORE, peak
+ * memory is roughly twice the dataset size. Callers free each patient's bytes as it is written.
+ */
+const unzipOrThrow = (zipBytes: Uint8Array, message: string): Record<string, Uint8Array> => {
     try {
-        zipBytes = await new File(pickedUri).bytes();
+        return unzipSync(zipBytes);
     } catch {
-        throw new Error("Couldn't read the selected file.");
+        throw new Error(message);
     }
+};
 
-    // NOTE: unzipSync holds the decompressed payload in memory. Since exports use STORE, peak
-    // memory is roughly twice the dataset size. We free each patient's bytes as it is written.
-    let entries: Record<string, Uint8Array>;
-    try {
-        entries = unzipSync(zipBytes);
-    } catch {
-        throw new Error("The selected file isn't a valid .zip archive.");
-    }
-
+/**
+ * Merge every patient folder in `entries` into the dataset on disk, then rebuild the index.
+ * Shared by file import and cloud restore — the only thing that differs is where the zip
+ * came from. Requires storage to already be initialised.
+ */
+const importEntriesAsync = async (
+    entries: Record<string, Uint8Array>,
+    policy: ConflictPolicy,
+    onProgress?: ProgressFn,
+): Promise<ImportSummary> => {
     const groups = groupEntriesByPatient(entries);
     const patientIds = Object.keys(groups);
     if (patientIds.length === 0) {
@@ -462,6 +528,7 @@ export const importDatasetAsync = async (onProgress?: ProgressFn): Promise<Impor
     const patientsRoot = await getPatientsRootDirectoryAsync();
 
     let imported = 0;
+    let replaced = 0;
     let skipped = 0;
     let invalid = 0;
     const total = patientIds.length;
@@ -470,13 +537,23 @@ export const importDatasetAsync = async (onProgress?: ProgressFn): Promise<Impor
         const patientId = patientIds[i];
         onProgress?.({ phase: "extracting", current: i, total });
 
-        // Skip-existing merge policy: never overwrite a patient that already exists on disk.
-        if (getExistingPatientDir(patientId)) {
+        const existingDir = getExistingPatientDir(patientId);
+        if (existingDir && policy === "skip") {
             skipped += 1;
         } else {
             try {
+                if (existingDir) {
+                    // Parse before destroying anything, so an unreadable archive entry costs the
+                    // user an `invalid` count rather than the record they already had.
+                    JSON.parse(strFromU8(groups[patientId][STORAGE.patientFileName]));
+                    // Drop the whole folder rather than writing over it: photos the archive no
+                    // longer contains must not survive as orphans, and their index rows go too.
+                    await safeDeleteDir(existingDir);
+                    await consultationIndexService.deleteConsultationsByPatientAsync(patientId);
+                }
                 await importSinglePatientAsync(patientsRoot, patientId, groups[patientId]);
-                imported += 1;
+                if (existingDir) replaced += 1;
+                else imported += 1;
             } catch {
                 invalid += 1;
             }
@@ -493,5 +570,72 @@ export const importDatasetAsync = async (onProgress?: ProgressFn): Promise<Impor
     await patientIndexService.rebuildAllPatientsAsync();
     await clearImageCacheAsync();
 
-    return { cancelled: false, imported, skipped, invalid };
+    // Wake any screen that is already mounted and focused (the restore offered at sign-in
+    // lands on the patient list, which would otherwise never re-query).
+    bumpDatasetRevision();
+
+    return { imported, replaced, skipped, invalid };
+};
+
+export const importDatasetAsync = async (
+    policy: ConflictPolicy,
+    onProgress?: ProgressFn,
+): Promise<ImportResult> => {
+    await initStorageAsync();
+
+    onProgress?.({ phase: "reading", current: 0, total: 0 });
+
+    const pickedUri = await pickBackupFileAsync();
+    if (!pickedUri) return { cancelled: true };
+
+    let zipBytes: Uint8Array;
+    try {
+        zipBytes = await new File(pickedUri).bytes();
+    } catch {
+        throw new Error("Couldn't read the selected file.");
+    }
+
+    const entries = unzipOrThrow(zipBytes, "The selected file isn't a valid .zip archive.");
+    return { cancelled: false, ...(await importEntriesAsync(entries, policy, onProgress)) };
+};
+
+// ---------------------------------------------------------------------------
+// Restore (Google Drive)
+// ---------------------------------------------------------------------------
+
+/**
+ * Pull the latest Drive backup and merge it into the dataset — import, with the archive
+ * fetched instead of picked. Throws `NoCloudBackupError` when the account has none.
+ */
+export const restoreFromDriveAsync = async (
+    policy: ConflictPolicy,
+    onProgress?: ProgressFn,
+): Promise<RestoreResult> => {
+    onProgress?.({ phase: "searching", current: 0, total: 0 });
+
+    // Drive consent, then the search, before anything touches local storage: on Android
+    // `initStorageAsync` opens the SAF folder picker, and there is no sense making the user
+    // choose a folder only to be told there was nothing to restore into it.
+    const accessToken = await ensureDriveAccessTokenAsync();
+    const backup = await findLatestBackupAsync(accessToken);
+    if (!backup) throw new NoCloudBackupError();
+
+    await initStorageAsync();
+
+    onProgress?.({ phase: "downloading", current: 0, total: backup.size ?? 0 });
+    const tempFile = new File(Paths.cache, BACKUP.driveFileName);
+    try {
+        await downloadBackupAsync(accessToken, backup.id, tempFile.uri);
+
+        onProgress?.({ phase: "reading", current: 0, total: 0 });
+        const entries = unzipOrThrow(
+            await tempFile.bytes(),
+            "The cloud backup is damaged and couldn't be read.",
+        );
+
+        const summary = await importEntriesAsync(entries, policy, onProgress);
+        return { ...summary, fileId: backup.id, modifiedTime: backup.modifiedTime };
+    } finally {
+        deleteQuietly(tempFile);
+    }
 };

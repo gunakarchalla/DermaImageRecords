@@ -19,6 +19,7 @@ import { useColorScheme } from "nativewind";
 
 import { PatientListItem } from "../../components/PatientListItem";
 import { useThemeColors } from "../../hooks/useThemeColors";
+import { useDatasetRevision } from "../../services/datasetRevision";
 import { patientIndexService } from "../../services/indexing/patientIndexService";
 import { deletePatient } from "../../services/storage/storage";
 import type { Patient } from "../../types/models";
@@ -128,6 +129,17 @@ export default function HomeScreen() {
       loadFirstPage();
     }, [loadFirstPage]),
   );
+
+  // An import or cloud restore can rewrite the dataset while this screen is focused, which
+  // useFocusEffect can't see. Reload when the revision moves, but not on the initial render —
+  // the focus effect above already covers that.
+  const datasetRevision = useDatasetRevision();
+  const seenRevision = useRef(datasetRevision);
+  useEffect(() => {
+    if (seenRevision.current === datasetRevision) return;
+    seenRevision.current = datasetRevision;
+    void loadFirstPage();
+  }, [datasetRevision, loadFirstPage]);
 
   const confirmDelete = useCallback(
     (patient: Patient) => {

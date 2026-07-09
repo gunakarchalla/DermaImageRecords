@@ -6,6 +6,7 @@ import {
     ensureDirAsync,
     findChildDirectory,
     getOrCreateChildDirectoryAsync,
+    listEntriesSafe,
 } from "./fsUtils";
 
 let DATASET_ROOT_DIR: Directory | null = null;
@@ -45,6 +46,26 @@ export const getDatasetRootDirectoryAsync = async (): Promise<Directory> => {
 export const getPatientsRootDirectoryAsync = async (): Promise<Directory> => {
     await requireRootsAsync();
     return PATIENTS_ROOT_DIR!;
+};
+
+/**
+ * Whether any patient folder exists on disk, **without creating or prompting for anything**.
+ *
+ * The restore offer runs right after sign-in, before the user has necessarily picked a storage
+ * folder — and `getPatientsRootDirectoryAsync` would open the SAF picker to answer this. So we
+ * read the persisted root URI directly and treat "no folder chosen yet" as an empty dataset.
+ */
+export const hasAnyPatientsAsync = async (): Promise<boolean> => {
+    const containsPatientFolder = (patientsDir: Directory): boolean =>
+        listEntriesSafe(patientsDir).some((entry) => entry instanceof Directory);
+
+    if (PATIENTS_ROOT_DIR) return containsPatientFolder(PATIENTS_ROOT_DIR);
+
+    const rootUri = await getStorageDriver().getPersistedRootUriAsync();
+    if (!rootUri) return false;
+
+    const patientsDir = findChildDirectory(new Directory(rootUri), STORAGE.patientsFolderName);
+    return patientsDir ? containsPatientFolder(patientsDir) : false;
 };
 
 export const getExistingPatientDir = (patientId: string): Directory | null => {

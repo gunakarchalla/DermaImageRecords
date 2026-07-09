@@ -5,6 +5,7 @@ import { ActivityIndicator, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
+import { CloudRestoreGate } from "../components/CloudRestoreGate";
 import { useThemeColors } from "../hooks/useThemeColors";
 import { AuthProvider, useAuth } from "../services/auth/AuthProvider";
 import { BackupProvider } from "../services/backup/BackupProvider";
@@ -82,6 +83,9 @@ function RootNavigator() {
           <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         </Stack.Protected>
       </Stack>
+
+      {/* Sits over the Stack: offers a Drive restore when a signed-in user has no records yet. */}
+      <CloudRestoreGate />
     </>
   );
 }

@@ -19,7 +19,14 @@ import {
     type BackupPeriodKey,
 } from "../../constants/backup";
 import { useAuth } from "../auth/AuthProvider";
-import { backupToDriveAsync, isRetryableBackupError, type BackupProgress } from "./backupService";
+import {
+    backupToDriveAsync,
+    isRetryableBackupError,
+    restoreFromDriveAsync,
+    type BackupProgress,
+    type ConflictPolicy,
+    type RestoreResult,
+} from "./backupService";
 import {
     DEFAULT_BACKUP_SETTINGS,
     readBackupSettingsAsync,
@@ -47,6 +54,11 @@ type BackupContextValue = {
     setCustomDays: (customDays: number) => void;
     /** Run a backup immediately. Rejects on failure so the caller can surface it. */
     backupNow: () => Promise<void>;
+    /**
+     * Pull the latest Drive backup into the dataset. Rejects with `NoCloudBackupError` when the
+     * account has none, so the caller can say "no backup found" rather than "restore failed".
+     */
+    restoreFromCloud: (policy: ConflictPolicy) => Promise<RestoreResult>;
 };
 
 const BackupContext = createContext<BackupContextValue | null>(null);
@@ -182,6 +194,33 @@ export function BackupProvider({ children }: { children: ReactNode }) {
 
     const backupNow = useCallback(() => runBackup({ auto: false }), [runBackup]);
 
+    /**
+     * Restore shares `runningRef` with backup: the two must never overlap, or an automatic
+     * backup could archive a half-restored dataset and overwrite the very file being read.
+     */
+    const restoreFromCloud = useCallback(
+        async (policy: ConflictPolicy): Promise<RestoreResult> => {
+            if (runningRef.current) {
+                throw new Error("A backup is already running. Try again in a moment.");
+            }
+            runningRef.current = true;
+            setBusy(true);
+            setProgress(null);
+            try {
+                const result = await restoreFromDriveAsync(policy, setProgress);
+                // Adopt the restored archive as the keep-latest target, so the next backup
+                // overwrites it instead of stranding it and creating a second one.
+                persist({ ...settingsRef.current, driveFileId: result.fileId });
+                return result;
+            } finally {
+                runningRef.current = false;
+                setBusy(false);
+                setProgress(null);
+            }
+        },
+        [persist],
+    );
+
     // Automatic backup: on app foreground (and once on ready), back up if the chosen period has
     // elapsed since the last success, or if a retry from an earlier failure has come due.
     // Won't run while the app is closed.
@@ -265,8 +304,20 @@ export function BackupProvider({ children }: { children: ReactNode }) {
             setPeriodKey,
             setCustomDays,
             backupNow,
+            restoreFromCloud,
         }),
-        [ready, settings, busy, progress, lastError, setMode, setPeriodKey, setCustomDays, backupNow],
+        [
+            ready,
+            settings,
+            busy,
+            progress,
+            lastError,
+            setMode,
+            setPeriodKey,
+            setCustomDays,
+            backupNow,
+            restoreFromCloud,
+        ],
     );
 
     return <BackupContext.Provider value={value}>{children}</BackupContext.Provider>;

@@ -17,8 +17,12 @@ import { useThemeColors } from "../../hooks/useThemeColors";
 import { useBackup } from "../../services/backup/BackupProvider";
 import {
   type BackupProgress,
+  type ConflictPolicy,
+  describeBackupProgress,
   exportDatasetAsync,
   importDatasetAsync,
+  type ImportSummary,
+  NoCloudBackupError,
 } from "../../services/backup/backupService";
 
 type FeatherName = ComponentProps<typeof Feather>["name"];
@@ -51,24 +55,39 @@ function Section({
   );
 }
 
-const progressLabel = (progress: BackupProgress | null): string => {
-  if (!progress) return "Working…";
-  switch (progress.phase) {
-    case "scanning":
-      return "Scanning records…";
-    case "archiving":
-      return progress.total ? `Archiving ${progress.current} of ${progress.total}…` : "Archiving…";
-    case "uploading":
-      return "Uploading to Google Drive…";
-    case "reading":
-      return "Reading file…";
-    case "extracting":
-      return progress.total ? `Importing ${progress.current} of ${progress.total}…` : "Importing…";
-    case "indexing":
-      return "Rebuilding index…";
-    default:
-      return "Working…";
+/**
+ * Ask how to resolve patients that already exist on this device. Resolves null if the user
+ * backs out, so the caller can abort. Import and restore both go through this.
+ */
+const askConflictPolicyAsync = (title: string, message: string): Promise<ConflictPolicy | null> =>
+  new Promise((resolve) => {
+    Alert.alert(
+      title,
+      message,
+      [
+        { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
+        { text: "Keep mine", onPress: () => resolve("skip") },
+        { text: "Replace mine", style: "destructive", onPress: () => resolve("replace") },
+      ],
+      { onDismiss: () => resolve(null) },
+    );
+  });
+
+const summaryLines = (summary: ImportSummary): string[] => {
+  const lines: string[] = [];
+  if (summary.imported > 0 || summary.replaced === 0) {
+    lines.push(`Added ${summary.imported} patient${summary.imported === 1 ? "" : "s"}.`);
   }
+  if (summary.replaced > 0) {
+    lines.push(`Replaced ${summary.replaced} existing.`);
+  }
+  if (summary.skipped > 0) {
+    lines.push(`Kept ${summary.skipped} already present.`);
+  }
+  if (summary.invalid > 0) {
+    lines.push(`${summary.invalid} could not be read.`);
+  }
+  return lines;
 };
 
 const MODE_OPTIONS: { value: BackupMode; label: string }[] = [
@@ -240,21 +259,19 @@ export default function ImportExportScreen() {
     }
   }, []);
 
-  const runImport = useCallback(async () => {
+  const onImport = useCallback(async () => {
+    const policy = await askConflictPolicyAsync(
+      "Import records",
+      "Pick a .zip exported from this app. New patients are always added — choose what happens when a patient in the file already exists on this device.",
+    );
+    if (!policy) return;
+
     setBusy("import");
     setProgress(null);
     try {
-      const result = await importDatasetAsync(setProgress);
+      const result = await importDatasetAsync(policy, setProgress);
       if (result.cancelled) return;
-
-      const lines = [`Imported ${result.imported} patient${result.imported === 1 ? "" : "s"}.`];
-      if (result.skipped > 0) {
-        lines.push(`Skipped ${result.skipped} already present.`);
-      }
-      if (result.invalid > 0) {
-        lines.push(`${result.invalid} could not be read.`);
-      }
-      Alert.alert("Import complete", lines.join("\n"));
+      Alert.alert("Import complete", summaryLines(result).join("\n"));
     } catch (error) {
       Alert.alert("Import failed", (error as Error).message);
     } finally {
@@ -263,16 +280,24 @@ export default function ImportExportScreen() {
     }
   }, []);
 
-  const onImport = useCallback(() => {
-    Alert.alert(
-      "Import records",
-      "Pick a .zip exported from this app. New patients are added to your existing records; patients that already exist are left unchanged.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Choose file", onPress: () => void runImport() },
-      ],
+  const onRestore = useCallback(async () => {
+    const policy = await askConflictPolicyAsync(
+      "Restore from Google Drive",
+      "Your latest Drive backup will be downloaded and its patients added to this device. Choose what happens when a patient in the backup already exists here.",
     );
-  }, [runImport]);
+    if (!policy) return;
+
+    try {
+      const result = await cloud.restoreFromCloud(policy);
+      Alert.alert("Restore complete", summaryLines(result).join("\n"));
+    } catch (error) {
+      if (error instanceof NoCloudBackupError) {
+        Alert.alert("No backup found", "This Google account has no DermaImageRecords backup yet.");
+        return;
+      }
+      Alert.alert("Restore failed", (error as Error).message);
+    }
+  }, [cloud]);
 
   return (
     <SafeAreaView edges={["bottom", "left", "right"]} className="flex-1 bg-slate-50 dark:bg-slate-950">
@@ -374,14 +399,34 @@ export default function ImportExportScreen() {
           </Pressable>
         </Section>
 
+        {/* Restore */}
+        <Section
+          icon="refresh-ccw"
+          title="Restore"
+          subtitle="Bring your records back from the latest backup in your Google Drive — useful on a new device, or after reinstalling."
+        >
+          <Pressable
+            onPress={() => void onRestore()}
+            disabled={anyBusy}
+            className={`h-12 flex-row items-center justify-center rounded-lg border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-800 ${
+              anyBusy ? "opacity-50" : ""
+            }`}
+          >
+            <Feather name="download-cloud" size={18} color={colors.iconStrong} />
+            <Text className="ml-2 text-base font-semibold text-slate-900 dark:text-slate-100">
+              Restore from Google Drive
+            </Text>
+          </Pressable>
+        </Section>
+
         {/* Import */}
         <Section
           icon="download"
           title="Import"
-          subtitle="Add patient records from a .zip exported by this app. Existing patients are never overwritten."
+          subtitle="Add patient records from a .zip exported by this app."
         >
           <Pressable
-            onPress={onImport}
+            onPress={() => void onImport()}
             disabled={anyBusy}
             className={`h-12 flex-row items-center justify-center rounded-lg border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-800 ${
               anyBusy ? "opacity-50" : ""
@@ -408,7 +453,7 @@ export default function ImportExportScreen() {
           <View className="min-w-[220px] items-center rounded-2xl bg-white px-8 py-6 dark:bg-slate-900">
             <ActivityIndicator size="large" color={colors.accent} />
             <Text className="mt-3 text-center text-base font-medium text-slate-900 dark:text-slate-100">
-              {progressLabel(cloud.busy ? cloud.progress : progress)}
+              {describeBackupProgress(cloud.busy ? cloud.progress : progress)}
             </Text>
           </View>
         </View>
