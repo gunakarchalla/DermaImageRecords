@@ -7,6 +7,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { useThemeColors } from "../hooks/useThemeColors";
 import { AuthProvider, useAuth } from "../services/auth/AuthProvider";
+import { BackupProvider } from "../services/backup/BackupProvider";
 import { SettingsProvider } from "../services/preferences/SettingsProvider";
 import "../services/nativewindInterop";
 import "./global.css";
@@ -91,7 +92,9 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <AuthProvider>
           <SettingsProvider>
-            <RootNavigator />
+            <BackupProvider>
+              <RootNavigator />
+            </BackupProvider>
           </SettingsProvider>
         </AuthProvider>
       </SafeAreaProvider>
