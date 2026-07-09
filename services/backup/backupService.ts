@@ -5,7 +5,7 @@ import { strFromU8, unzipSync, Zip, ZipPassThrough } from "fflate";
 
 import { STORAGE } from "../../constants/storage";
 import type { Consultation, Patient } from "../../types/models";
-import { ensureDriveAccessTokenAsync, uploadLatestBackupAsync } from "./googleDrive";
+import { DriveAccessError, ensureDriveAccessTokenAsync, uploadLatestBackupAsync } from "./googleDrive";
 import { clearImageCacheAsync } from "../imageUri";
 import { patientIndexService } from "../indexing/patientIndexService";
 import {
@@ -56,6 +56,26 @@ export type ImportSummary = {
 
 export type ImportResult = ({ cancelled: false } & ImportSummary) | { cancelled: true };
 
+/** Thrown when the dataset holds nothing to archive. Retrying can't help until records exist. */
+export class EmptyDatasetError extends Error {
+    constructor() {
+        super("There are no records to export yet.");
+        this.name = "EmptyDatasetError";
+    }
+}
+
+/**
+ * Whether repeating a failed backup unattended could plausibly succeed. Drives the automatic
+ * retry backoff in ./BackupProvider — errors that need the user (sign in again, grant Drive
+ * consent) or that can't change on their own (nothing to back up) must not spin on a timer.
+ * Unrecognised failures (a dropped connection, a transient filesystem error) are worth a retry.
+ */
+export const isRetryableBackupError = (error: unknown): boolean => {
+    if (error instanceof EmptyDatasetError) return false;
+    if (error instanceof DriveAccessError) return error.retryable;
+    return true;
+};
+
 type ProgressFn = (progress: BackupProgress) => void;
 
 type WalkedFile = { relPath: string; file: File };
@@ -102,6 +122,23 @@ const mimeForFile = (name: string): string => {
     return "application/octet-stream";
 };
 
+/** Stage an in-memory archive as a real file in the cache dir (both share + Drive need a URI). */
+const writeTempArchive = (bytes: Uint8Array, fileName: string): File => {
+    const tempFile = new File(Paths.cache, fileName);
+    tempFile.create({ intermediates: true, overwrite: true });
+    tempFile.write(bytes);
+    return tempFile;
+};
+
+/** A leftover cache file is harmless, so cleanup never masks the real error. */
+const deleteQuietly = (file: File): void => {
+    try {
+        file.delete();
+    } catch {
+        // ignore
+    }
+};
+
 const backupTimestamp = (): string => {
     const now = new Date();
     const pad = (value: number) => value.toString().padStart(2, "0");
@@ -142,7 +179,7 @@ export const buildBackupZipAsync = async (
     collectFiles(datasetRoot, "", files);
 
     if (files.length === 0) {
-        throw new Error("There are no records to export yet.");
+        throw new EmptyDatasetError();
     }
 
     const total = files.length;
@@ -186,9 +223,7 @@ export const exportDatasetAsync = async (onProgress?: ProgressFn): Promise<{ fil
 
     // Write the archive to a temp cache file, then let the OS share sheet place it wherever
     // the user chooses ("Save to Files", Drive, email, …).
-    const tempFile = new File(Paths.cache, fileName);
-    tempFile.create({ intermediates: true, overwrite: true });
-    tempFile.write(zipBytes);
+    const tempFile = writeTempArchive(zipBytes, fileName);
 
     await Sharing.shareAsync(tempFile.uri, {
         mimeType: "application/zip",
@@ -196,12 +231,8 @@ export const exportDatasetAsync = async (onProgress?: ProgressFn): Promise<{ fil
         UTI: "public.zip-archive",
     });
 
-    // Best-effort cleanup once the share sheet is dismissed; a leftover cache file is harmless.
-    try {
-        tempFile.delete();
-    } catch {
-        // ignore
-    }
+    // Best-effort cleanup once the share sheet is dismissed.
+    deleteQuietly(tempFile);
 
     return { fileName, fileCount };
 };
@@ -221,13 +252,21 @@ export const backupToDriveAsync = async (
     existingFileId: string | null,
     onProgress?: ProgressFn,
 ): Promise<CloudBackupResult> => {
-    const { bytes, fileCount } = await buildBackupZipAsync(onProgress);
+    const { bytes, fileName, fileCount } = await buildBackupZipAsync(onProgress);
 
     onProgress?.({ phase: "uploading", current: 0, total: 0 });
+    // Ask for the token before staging the archive: consent can still fail or be declined
+    // here, and there is no point writing a temp file we would immediately delete.
     const accessToken = await ensureDriveAccessTokenAsync();
-    const fileId = await uploadLatestBackupAsync(accessToken, bytes, existingFileId);
 
-    return { fileId, fileCount };
+    // The upload streams from disk rather than from memory — see services/backup/googleDrive.ts.
+    const tempFile = writeTempArchive(bytes, fileName);
+    try {
+        const fileId = await uploadLatestBackupAsync(accessToken, tempFile.uri, existingFileId);
+        return { fileId, fileCount };
+    } finally {
+        deleteQuietly(tempFile);
+    }
 };
 
 // ---------------------------------------------------------------------------

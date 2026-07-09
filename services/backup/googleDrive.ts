@@ -1,4 +1,8 @@
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
+// The new expo-file-system API has no uploader, so the archive upload is the one place we
+// reach for the legacy module (see CLAUDE.md). `uploadAsync` streams the file from native,
+// which is what keeps a multi-hundred-MB photo archive off the JS heap.
+import { FileSystemUploadType, uploadAsync } from "expo-file-system/legacy";
 
 import { BACKUP } from "../../constants/backup";
 
@@ -12,15 +16,39 @@ import { BACKUP } from "../../constants/backup";
  *
  * Retention is keep-only-latest: a single Drive file (`driveFileId`) is overwritten on
  * every backup. If that file was deleted from Drive, the upload transparently recreates it.
+ *
+ * The archive is uploaded **from a file on disk, never as a `Blob` or a typed array**.
+ * React Native's `Blob` cannot be constructed from an `ArrayBuffer`/`ArrayBufferView` (it
+ * throws "Creating blobs from 'ArrayBuffer' and 'ArrayBufferView' are not supported"), and
+ * handing `fetch` a `Uint8Array` instead makes RN base64-encode the whole payload in JS —
+ * several copies of the archive in memory. Both are dead ends for a photo-sized backup.
  */
 
-/** Raised when Drive can't be reached and the user should retry / re-sign-in. */
+/**
+ * Raised when Drive can't be reached and the user should retry / re-sign-in.
+ *
+ * `retryable` says whether repeating the same call unattended could succeed: a network
+ * blip, an expired token or a 5xx will, whereas a missing Google session or a declined
+ * Drive consent needs the user, so an automatic retry would only spin. See
+ * `isRetryableBackupError` in ./backupService.
+ */
 export class DriveAccessError extends Error {
-    constructor(message: string) {
+    constructor(
+        message: string,
+        readonly retryable: boolean,
+    ) {
         super(message);
         this.name = "DriveAccessError";
     }
 }
+
+/**
+ * HTTP statuses worth retrying unattended: rate limits, timeouts, server-side faults, and
+ * 401 (each backup fetches a fresh access token, so an expired one self-heals). A 403
+ * (permission revoked) or 400 will not fix itself.
+ */
+const isTransientStatus = (status: number): boolean =>
+    status === 401 || status === 408 || status === 429 || status >= 500;
 
 /**
  * Obtain a Google OAuth access token that carries the Drive scope. Restores the native
@@ -40,6 +68,7 @@ export const ensureDriveAccessTokenAsync = async (): Promise<string> => {
     if (!current) {
         throw new DriveAccessError(
             "Please sign in with Google again to enable cloud backup.",
+            false,
         );
     }
 
@@ -50,6 +79,7 @@ export const ensureDriveAccessTokenAsync = async (): Promise<string> => {
         } catch {
             throw new DriveAccessError(
                 "Google Drive permission is required for cloud backup.",
+                false,
             );
         }
     }
@@ -58,28 +88,34 @@ export const ensureDriveAccessTokenAsync = async (): Promise<string> => {
         const { accessToken } = await GoogleSignin.getTokens();
         return accessToken;
     } catch {
-        throw new DriveAccessError("Couldn't get Google Drive access. Please try again.");
+        throw new DriveAccessError("Couldn't get Google Drive access. Please try again.", true);
     }
 };
 
+/** Stream `fileUri` into the media body of an existing Drive file. */
 const uploadMediaAsync = async (
     accessToken: string,
     fileId: string,
-    body: Blob,
+    fileUri: string,
 ): Promise<void> => {
-    const res = await fetch(
+    const res = await uploadAsync(
         `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
+        fileUri,
         {
-            method: "PATCH",
+            httpMethod: "PATCH",
+            uploadType: FileSystemUploadType.BINARY_CONTENT,
             headers: {
                 Authorization: `Bearer ${accessToken}`,
                 "Content-Type": BACKUP.driveMimeType,
             },
-            body,
         },
     );
-    if (!res.ok) {
-        throw new DriveAccessError(`Drive upload failed (${res.status}).`);
+    // uploadAsync resolves for any completed request, so the status is ours to check.
+    if (res.status < 200 || res.status > 299) {
+        throw new DriveAccessError(
+            `Drive upload failed (${res.status}).`,
+            isTransientStatus(res.status),
+        );
     }
 };
 
@@ -96,30 +132,29 @@ const createFileAsync = async (accessToken: string): Promise<string> => {
         }),
     });
     if (!res.ok) {
-        throw new DriveAccessError(`Couldn't create the Drive backup file (${res.status}).`);
+        throw new DriveAccessError(
+            `Couldn't create the Drive backup file (${res.status}).`,
+            isTransientStatus(res.status),
+        );
     }
     const json = (await res.json()) as { id?: string };
-    if (!json.id) throw new DriveAccessError("Drive did not return a file id.");
+    if (!json.id) throw new DriveAccessError("Drive did not return a file id.", true);
     return json.id;
 };
 
 /**
- * Upload `bytes` as the single latest backup, overwriting the file identified by
- * `existingFileId` when possible. Returns the id of the file that now holds the backup
- * (persist it for the next run). Recreates the file if the stored id is gone (404).
+ * Upload the archive at `fileUri` as the single latest backup, overwriting the file
+ * identified by `existingFileId` when possible. Returns the id of the file that now holds
+ * the backup (persist it for the next run). Recreates the file if the stored id is gone (404).
  */
 export const uploadLatestBackupAsync = async (
     accessToken: string,
-    bytes: Uint8Array,
+    fileUri: string,
     existingFileId: string | null,
 ): Promise<string> => {
-    // Cast: a Uint8Array is a valid BlobPart at runtime; the type error is only about the
-    // ArrayBufferLike vs ArrayBuffer union under the current lib settings.
-    const body = new Blob([bytes as unknown as BlobPart], { type: BACKUP.driveMimeType });
-
     if (existingFileId) {
         try {
-            await uploadMediaAsync(accessToken, existingFileId, body);
+            await uploadMediaAsync(accessToken, existingFileId, fileUri);
             return existingFileId;
         } catch {
             // The stored file may have been deleted/renamed on Drive — fall through and
@@ -128,6 +163,6 @@ export const uploadLatestBackupAsync = async (
     }
 
     const fileId = await createFileAsync(accessToken);
-    await uploadMediaAsync(accessToken, fileId, body);
+    await uploadMediaAsync(accessToken, fileId, fileUri);
     return fileId;
 };

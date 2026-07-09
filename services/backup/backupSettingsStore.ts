@@ -15,6 +15,10 @@ import {
 // the user's choices: `lastBackupAt` drives the "period elapsed?" check for automatic
 // backups, and `driveFileId` implements keep-only-latest by pointing at the single
 // Drive file we overwrite each time.
+//
+// `retryAttempt` / `nextRetryAt` carry the automatic-backup retry backoff. Persisting them
+// means a failure keeps its place in the backoff across a restart, instead of firing another
+// immediate attempt every time the app launches. Both reset to 0 / null on any success.
 
 export type StoredBackupSettings = {
     mode: BackupMode;
@@ -22,6 +26,10 @@ export type StoredBackupSettings = {
     customDays: number;
     lastBackupAt: number | null;
     driveFileId: string | null;
+    /** Consecutive failed automatic backups; 0 when the last run succeeded. */
+    retryAttempt: number;
+    /** Epoch ms at which the pending retry is due, or null when none is scheduled. */
+    nextRetryAt: number | null;
 };
 
 export const DEFAULT_BACKUP_SETTINGS: StoredBackupSettings = {
@@ -30,6 +38,8 @@ export const DEFAULT_BACKUP_SETTINGS: StoredBackupSettings = {
     customDays: BACKUP.defaultCustomDays,
     lastBackupAt: null,
     driveFileId: null,
+    retryAttempt: 0,
+    nextRetryAt: null,
 };
 
 const BACKUP_FILE = new File(Paths.document, BACKUP.fileName);
@@ -57,6 +67,11 @@ export const readBackupSettingsAsync = async (): Promise<StoredBackupSettings> =
             lastBackupAt:
                 typeof parsed.lastBackupAt === "number" ? parsed.lastBackupAt : null,
             driveFileId: typeof parsed.driveFileId === "string" ? parsed.driveFileId : null,
+            retryAttempt:
+                typeof parsed.retryAttempt === "number" && parsed.retryAttempt > 0
+                    ? Math.min(Math.floor(parsed.retryAttempt), BACKUP.maxRetryAttempts)
+                    : 0,
+            nextRetryAt: typeof parsed.nextRetryAt === "number" ? parsed.nextRetryAt : null,
         };
     } catch {
         // Corrupt/unreadable config should never crash the app; fall back to defaults.

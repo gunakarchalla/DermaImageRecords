@@ -86,6 +86,14 @@ const formatLastBackup = (ts: number | null): string => {
   })}`;
 };
 
+/** Reassure the user that a failed automatic backup is coming back on its own. */
+const formatNextRetry = (ts: number | null): string | null => {
+  if (!ts) return null;
+  if (Date.now() >= ts) return "Retrying shortly…";
+  const time = new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `Will retry automatically around ${time}.`;
+};
+
 // The active/inactive styling below is applied via inline `style`, not by toggling
 // Tailwind classes. Dynamically adding/removing a shadow or interaction class on a
 // css-interop component after its first render trips its "View → Pressable" upgrade
@@ -205,6 +213,10 @@ export default function ImportExportScreen() {
 
   const cloud = useBackup();
   const anyBusy = busy !== null || cloud.busy;
+  // A pending retry outlives a switch away from automatic mode (so re-enabling resumes the
+  // backoff), but only automatic mode actually runs it — don't promise a retry otherwise.
+  const retryNotice =
+    cloud.busy || cloud.mode !== "automatic" ? null : formatNextRetry(cloud.nextRetryAt);
 
   const onBackupNow = useCallback(async () => {
     try {
@@ -331,6 +343,11 @@ export default function ImportExportScreen() {
               {cloud.lastError ? (
                 <Text className="mt-1 text-xs text-rose-500 dark:text-rose-400">
                   Last attempt failed: {cloud.lastError}
+                </Text>
+              ) : null}
+              {retryNotice ? (
+                <Text className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  {retryNotice}
                 </Text>
               ) : null}
             </>

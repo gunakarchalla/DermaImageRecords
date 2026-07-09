@@ -34,6 +34,13 @@ export const BACKUP = {
     defaultCustomDays: 3,
     minCustomDays: 1,
     maxCustomDays: 90,
+
+    // A failed automatic backup is retried on an exponential backoff rather than waiting
+    // for the next foreground or the next period. Delays: 1, 2, 4, 8, 16 minutes (capped),
+    // after which we stop and let the next foreground / due-check start over.
+    retryBaseDelayMs: 60_000,
+    retryMaxDelayMs: 30 * 60_000,
+    maxRetryAttempts: 5,
 } as const;
 
 export const clampCustomDays = (days: number): number =>
@@ -45,6 +52,16 @@ export const periodDays = (periodKey: BackupPeriodKey, customDays: number): numb
     const preset = BACKUP_PERIOD_PRESETS.find((p) => p.key === periodKey);
     return preset?.days ?? 7;
 };
+
+/**
+ * Delay before the `attempt`-th consecutive retry of a failed automatic backup (1-based),
+ * doubling each time and capped at `retryMaxDelayMs`.
+ */
+export const retryDelayMs = (attempt: number): number =>
+    Math.min(
+        BACKUP.retryBaseDelayMs * 2 ** Math.max(0, attempt - 1),
+        BACKUP.retryMaxDelayMs,
+    );
 
 /** Human-readable summary of the selected period, e.g. "Weekly" or "Every 3 days". */
 export const periodLabel = (periodKey: BackupPeriodKey, customDays: number): string => {
