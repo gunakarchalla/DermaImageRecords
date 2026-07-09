@@ -5,6 +5,7 @@ import { Pressable, Text, View } from "react-native";
 
 import { useThemeColors } from "../hooks/useThemeColors";
 import { toRenderableImageUriAsync } from "../services/imageUri";
+import { formatEmrNumberForDisplay } from "../services/patient/emr";
 import type { Patient } from "../types/models";
 
 type Props = {
@@ -69,11 +70,9 @@ export const PatientListItem = memo(function PatientListItem({
         <Text className="text-lg font-semibold text-slate-900 dark:text-slate-100">
           {patient.name}
         </Text>
-        {patient.emrNumber ? (
-          <Text className="text-sm text-slate-500 dark:text-slate-400">
-            EMR: {patient.emrNumber}
-          </Text>
-        ) : null}
+        <Text className="text-sm text-slate-500 dark:text-slate-400">
+          EMR: {formatEmrNumberForDisplay(patient.emrNumber)}
+        </Text>
         <Text className="text-xs text-slate-400 mt-1 dark:text-slate-500">
           Updated {new Date(patient.updatedAt).toLocaleString()}
         </Text>

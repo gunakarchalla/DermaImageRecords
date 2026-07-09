@@ -84,6 +84,13 @@ const summaryLines = (summary: ImportSummary): string[] => {
   if (summary.skipped > 0) {
     lines.push(`Kept ${summary.skipped} already present.`);
   }
+  if (summary.duplicateInArchive > 0) {
+    lines.push(
+      `Ignored ${summary.duplicateInArchive} repeated EMR number${
+        summary.duplicateInArchive === 1 ? "" : "s"
+      } in the file.`,
+    );
+  }
   if (summary.invalid > 0) {
     lines.push(`${summary.invalid} could not be read.`);
   }
@@ -262,7 +269,7 @@ export default function ImportExportScreen() {
   const onImport = useCallback(async () => {
     const policy = await askConflictPolicyAsync(
       "Import records",
-      "Pick a .zip exported from this app. New patients are always added — choose what happens when a patient in the file already exists on this device.",
+      "Pick a .zip exported from this app. New patients are always added — choose what happens when a patient in the file has the same EMR number as one on this device.",
     );
     if (!policy) return;
 
@@ -283,7 +290,7 @@ export default function ImportExportScreen() {
   const onRestore = useCallback(async () => {
     const policy = await askConflictPolicyAsync(
       "Restore from Google Drive",
-      "Your latest Drive backup will be downloaded and its patients added to this device. Choose what happens when a patient in the backup already exists here.",
+      "Your latest Drive backup will be downloaded and its patients added to this device. Choose what happens when a patient in the backup has the same EMR number as one already here.",
     );
     if (!policy) return;
 
@@ -442,7 +449,7 @@ export default function ImportExportScreen() {
         <View className="mt-1 flex-row items-start">
           <Feather name="info" size={14} color={colors.iconMuted} style={{ marginTop: 2 }} />
           <Text className="ml-2 flex-1 text-xs text-slate-400 dark:text-slate-500">
-            Records are matched by their unique ID, so re-importing the same backup won&apos;t
+            Records are matched by their EMR number, so re-importing the same backup won&apos;t
             create duplicates.
           </Text>
         </View>

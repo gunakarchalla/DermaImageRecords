@@ -17,12 +17,14 @@ import { FlashList } from "@shopify/flash-list";
 import { useColorScheme } from "nativewind";
 
 import { useThemeColors } from "../../../hooks/useThemeColors";
+import type { ConsultationCursor } from "../../../services/db/dermaDb";
 import { toRenderableImageUriAsync } from "../../../services/imageUri";
 import { consultationIndexService } from "../../../services/indexing/consultationIndexService";
+import { formatEmrNumberForDisplay } from "../../../services/patient/emr";
 import {
   deleteConsultation,
   getPatient,
-  savePatient,
+  updatePatientAsync,
 } from "../../../services/storage/storage";
 import { ConsultationIndexRow, Gender, Patient } from "../../../types/models";
 
@@ -53,12 +55,10 @@ export default function PatientDetailsScreen() {
     string | undefined
   >();
 
-  const cursorRef = useRef<{ updatedAt: string; id: string } | undefined>(
-    undefined,
-  );
+  const cursorRef = useRef<ConsultationCursor | undefined>(undefined);
+  // No `emrNumber` here by design: the EMR is this patient's identity and is immutable.
   const [form, setForm] = useState({
     name: "",
-    emrNumber: "",
     age: "",
     gender: "unspecified" as Gender,
     phone: "",
@@ -89,7 +89,6 @@ export default function PatientDetailsScreen() {
 
         setForm({
           name: patientData.name,
-          emrNumber: patientData.emrNumber ?? "",
           age: patientData.age ? String(patientData.age) : "",
           gender: patientData.gender ?? "unspecified",
           phone: patientData.phone ?? "",
@@ -245,9 +244,8 @@ export default function PatientDetailsScreen() {
     const ageValue = Number.isFinite(ageNumber) ? ageNumber : undefined;
 
     try {
-      const updated = await savePatient(patientId as string, {
+      const updated = await updatePatientAsync(patientId as string, {
         name: form.name,
-        emrNumber: form.emrNumber,
         age: form.age ? ageValue : undefined,
         gender: form.gender,
         phone: form.phone,
@@ -288,7 +286,7 @@ export default function PatientDetailsScreen() {
     >
       <View className="flex-row items-center justify-between mb-1">
         <Text className="text-base font-semibold text-slate-900 dark:text-slate-100">
-          Consultation
+          Consultation #{item.number}
         </Text>
         <View className="flex-row items-center">
           <Text className="text-xs text-slate-500 dark:text-slate-400">
@@ -374,12 +372,24 @@ export default function PatientDetailsScreen() {
 
         {editing ? (
           <View>
+            {/* The EMR identifies this patient's folder, index row, and every consultation,
+                so it is shown but never editable. */}
+            <View className="mb-3">
+              <Text className="text-sm text-slate-600 mb-1 dark:text-slate-400">
+                EMR Number
+              </Text>
+              <View className="flex-row items-center justify-between bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 dark:bg-slate-800 dark:border-slate-700">
+                <Text className="text-slate-500 dark:text-slate-400">
+                  {formatEmrNumberForDisplay(patient.emrNumber)}
+                </Text>
+                <Feather name="lock" size={14} color={colors.iconMuted} />
+              </View>
+              <Text className="text-xs text-slate-400 mt-1 dark:text-slate-500">
+                An EMR number can&apos;t be changed once the patient is created.
+              </Text>
+            </View>
+
             {[
-              {
-                label: "EMR Number",
-                value: form.emrNumber,
-                key: "emrNumber",
-              },
               {
                 label: "Age",
                 value: form.age,
@@ -470,11 +480,9 @@ export default function PatientDetailsScreen() {
           </View>
         ) : (
           <View>
-            {patient.emrNumber ? (
-              <Text className="text-base text-slate-700 dark:text-slate-200">
-                EMR: {patient.emrNumber}
-              </Text>
-            ) : null}
+            <Text className="text-base text-slate-700 dark:text-slate-200">
+              EMR: {formatEmrNumberForDisplay(patient.emrNumber)}
+            </Text>
             {patient.age ? (
               <Text className="text-base text-slate-700 dark:text-slate-200">
                 Age: {patient.age}

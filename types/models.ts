@@ -1,19 +1,44 @@
 export type Gender = "male" | "female" | "other" | "unspecified";
 
+/**
+ * INVARIANT: `id === emrNumber`, always the canonical (trimmed, uppercased) EMR.
+ *
+ * The EMR number is the patient's identity: it names the patient's folder under `patients/`,
+ * it is the `patientId` route param, it is the primary key of the SQLite index, and it is the
+ * `patientId` stored in every consultation. `id` is kept as the structural identifier used by
+ * storage/routing, `emrNumber` as the name the UI reads — they are two spellings of one value.
+ *
+ * Only two writers construct a Patient (`createPatientAsync` and the importer); both derive
+ * these fields together from a single canonical string. The EMR is immutable thereafter.
+ */
 export type Patient = {
     id: string;
+    emrNumber: string;
     name: string;
-    emrNumber?: string;
     age?: number;
     gender?: Gender;
     phone?: string;
     profilePhotoUri?: string;
+    /**
+     * The highest consultation number ever issued to this patient — not the count of
+     * consultations that currently exist. Deleting a visit never decrements it, which is what
+     * makes a consultation number a permanent identifier. See services/consultation/consultationNumber.ts.
+     */
+    lastConsultationNumber: number;
     createdAt: string;
     updatedAt: string;
 };
 
+/**
+ * INVARIANT: `id === formatConsultationNumber(number)`, and `id` is the consultation's folder
+ * name inside `<patient>/consultations/`. `number` is the patient-scoped sequence (1, 2, 3…);
+ * `id` is its zero-padded spelling, used as the folder name and the route param.
+ *
+ * The number is assigned by `saveConsultation` and never entered by the user.
+ */
 export type Consultation = {
     id: string;
+    number: number;
     patientId: string;
     remarks: string;
     photoUris: string[];
@@ -25,6 +50,7 @@ export type Consultation = {
 // NOTE: The index stores only `photoCount` (not full photo URIs) to keep the DB small and rebuildable.
 export type ConsultationIndexRow = {
     id: string;
+    number: number;
     patientId: string;
     remarks: string;
     photoCount: number;
@@ -32,9 +58,22 @@ export type ConsultationIndexRow = {
     updatedAt: string;
 };
 
-export type PatientInput = {
+/** Creating a patient is the only moment an EMR number may be chosen, so it is required here. */
+export type PatientCreateInput = {
+    emrNumber: string;
     name: string;
-    emrNumber?: string;
+    age?: number;
+    gender?: Gender;
+    phone?: string;
+    profilePhotoUri?: string;
+};
+
+/**
+ * Editing a patient cannot change the EMR — the field is absent by design, so an attempt to
+ * reassign identity fails to compile rather than silently orphaning a folder.
+ */
+export type PatientUpdateInput = {
+    name: string;
     age?: number;
     gender?: Gender;
     phone?: string;

@@ -88,7 +88,7 @@ export default function ViewConsultationScreen() {
       >
         <View className="flex-row items-center justify-between mb-3">
           <Text className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-            Consultation
+            Consultation #{consultation.number}
           </Text>
           <Pressable
             onPress={() =>

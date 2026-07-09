@@ -7,6 +7,18 @@ import type { Consultation, ConsultationIndexRow, Patient } from "../../types/mo
 
 const DB_NAME = "derma-index.db";
 
+/**
+ * Bump whenever the table shape changes. The index is rebuildable from disk, so a mismatch is
+ * resolved by dropping everything rather than by migrating: clearing `meta` leaves
+ * `patients.lastReindexAt` unset, which makes `ensurePatientsIndexAsync` do a full rebuild.
+ *
+ * v2: the EMR number became the patient's identity, so `patients.id` *is* the EMR and the
+ * separate `emrNumber` / `emrNumberSort` columns were dropped.
+ * v3: consultations gained a per-patient sequence `number`, which orders the list and drives
+ * pagination; patients gained `lastConsultationNumber`.
+ */
+const DB_SCHEMA_VERSION = 3;
+
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 let schemaReadyPromise: Promise<void> | null = null;
 
@@ -27,6 +39,20 @@ const ensureSchemaAsync = async () => {
         await db.execAsync("PRAGMA journal_mode=WAL;");
         await db.execAsync("PRAGMA foreign_keys=ON;");
 
+        // `user_version` avoids a chicken-and-egg with the `meta` table, which we may drop below.
+        const versionRow = await db.getFirstAsync<{ user_version: number }>("PRAGMA user_version");
+        const installedVersion = versionRow?.user_version ?? 0;
+
+        if (installedVersion !== DB_SCHEMA_VERSION) {
+            await db.execAsync(
+                `
+                DROP TABLE IF EXISTS consultations;
+                DROP TABLE IF EXISTS patients;
+                DROP TABLE IF EXISTS meta;
+            `
+            );
+        }
+
         await db.execAsync(
             `
             CREATE TABLE IF NOT EXISTS meta (
@@ -34,16 +60,17 @@ const ensureSchemaAsync = async () => {
                 value TEXT NOT NULL
             );
 
+            -- \`id\` is the canonical EMR number (see types/models.ts). The primary key is
+            -- therefore the uniqueness constraint on the EMR; no separate column is needed.
             CREATE TABLE IF NOT EXISTS patients (
                 id TEXT PRIMARY KEY NOT NULL,
                 name TEXT NOT NULL,
                 nameSort TEXT NOT NULL,
-                emrNumber TEXT,
-                emrNumberSort TEXT,
                 age INTEGER,
                 gender TEXT,
                 phone TEXT,
                 profilePhotoUri TEXT,
+                lastConsultationNumber INTEGER NOT NULL DEFAULT 0,
                 createdAt TEXT NOT NULL,
                 updatedAt TEXT NOT NULL
             );
@@ -52,8 +79,11 @@ const ensureSchemaAsync = async () => {
             CREATE INDEX IF NOT EXISTS idx_patients_createdAt ON patients(createdAt);
             CREATE INDEX IF NOT EXISTS idx_patients_nameSort ON patients(nameSort);
 
+            -- \`id\` is the zero-padded spelling of \`number\`, and the consultation's folder
+            -- name. Ordering and pagination use the integer \`number\`, never the padded text.
             CREATE TABLE IF NOT EXISTS consultations (
                 id TEXT NOT NULL,
+                number INTEGER NOT NULL,
                 patientId TEXT NOT NULL,
                 remarks TEXT NOT NULL,
                 photoCount INTEGER NOT NULL,
@@ -62,9 +92,14 @@ const ensureSchemaAsync = async () => {
                 PRIMARY KEY (patientId, id)
             );
 
-            CREATE INDEX IF NOT EXISTS idx_consultations_patient_updatedAt ON consultations(patientId, updatedAt);
+            CREATE INDEX IF NOT EXISTS idx_consultations_patient_number ON consultations(patientId, number);
         `
         );
+
+        if (installedVersion !== DB_SCHEMA_VERSION) {
+            // Not parameterizable — the value is a literal we control.
+            await db.execAsync(`PRAGMA user_version = ${DB_SCHEMA_VERSION};`);
+        }
     })();
 
     return schemaReadyPromise;
@@ -80,9 +115,10 @@ export type PatientCursor = {
     id: string;
 };
 
+/** Keyset cursor for a patient's consultations. `number` is unique per patient, so it alone
+ *  gives a stable total order — no tiebreak column is needed. */
 export type ConsultationCursor = {
-    updatedAt: string;
-    id: string;
+    number: number;
 };
 
 export const dermaDb = {
@@ -136,17 +172,16 @@ export const dermaDb = {
             await txn.runAsync(
                 `
                 INSERT INTO patients(
-                    id, name, nameSort, emrNumber, emrNumberSort, age, gender, phone, profilePhotoUri, createdAt, updatedAt
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, name, nameSort, age, gender, phone, profilePhotoUri, lastConsultationNumber, createdAt, updatedAt
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     nameSort = excluded.nameSort,
-                    emrNumber = excluded.emrNumber,
-                    emrNumberSort = excluded.emrNumberSort,
                     age = excluded.age,
                     gender = excluded.gender,
                     phone = excluded.phone,
                     profilePhotoUri = excluded.profilePhotoUri,
+                    lastConsultationNumber = excluded.lastConsultationNumber,
                     createdAt = excluded.createdAt,
                     updatedAt = excluded.updatedAt
             `,
@@ -154,12 +189,11 @@ export const dermaDb = {
                     patient.id,
                     patient.name,
                     normalizeSortText(patient.name),
-                    patient.emrNumber ?? null,
-                    normalizeSortText(patient.emrNumber),
                     patient.age ?? null,
                     patient.gender ?? null,
                     patient.phone ?? null,
                     patient.profilePhotoUri ?? null,
+                    patient.lastConsultationNumber,
                     patient.createdAt,
                     patient.updatedAt,
                 ]
@@ -201,7 +235,9 @@ export const dermaDb = {
         const args: (string | number | null)[] = [];
 
         if (hasSearch) {
-            where.push("(nameSort LIKE ? OR emrNumberSort LIKE ?)");
+            // `id` is the canonical (uppercase) EMR and `search` is lowercased, so match on
+            // LOWER(id). A `%…%` pattern can't use an index anyway, so no stored sort column.
+            where.push("(nameSort LIKE ? OR LOWER(id) LIKE ?)");
             const pattern = `%${search}%`;
             args.push(pattern, pattern);
         }
@@ -223,17 +259,17 @@ export const dermaDb = {
         const rows = await db.getAllAsync<{
             id: string;
             name: string;
-            emrNumber: string | null;
             age: number | null;
             gender: string | null;
             phone: string | null;
             profilePhotoUri: string | null;
+            lastConsultationNumber: number;
             createdAt: string;
             updatedAt: string;
             nameSort: string;
         }>(
             `
-            SELECT id, name, emrNumber, age, gender, phone, profilePhotoUri, createdAt, updatedAt, nameSort
+            SELECT id, name, age, gender, phone, profilePhotoUri, lastConsultationNumber, createdAt, updatedAt, nameSort
             FROM patients
             ${whereSql}
             ORDER BY ${sortExpr} ${direction}, id ${direction}
@@ -244,12 +280,13 @@ export const dermaDb = {
 
         const items: Patient[] = rows.map((r) => ({
             id: r.id,
+            emrNumber: r.id, // the id *is* the EMR; see types/models.ts
             name: r.name,
-            emrNumber: r.emrNumber ?? undefined,
             age: r.age ?? undefined,
             gender: (r.gender as Patient["gender"]) ?? undefined,
             phone: r.phone ?? undefined,
             profilePhotoUri: r.profilePhotoUri ?? undefined,
+            lastConsultationNumber: r.lastConsultationNumber,
             createdAt: r.createdAt,
             updatedAt: r.updatedAt,
         }));
@@ -272,9 +309,10 @@ export const dermaDb = {
         await db.withExclusiveTransactionAsync(async (txn) => {
             await txn.runAsync(
                 `
-                INSERT INTO consultations(id, patientId, remarks, photoCount, createdAt, updatedAt)
-                VALUES(?, ?, ?, ?, ?, ?)
+                INSERT INTO consultations(id, number, patientId, remarks, photoCount, createdAt, updatedAt)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(patientId, id) DO UPDATE SET
+                    number = excluded.number,
                     remarks = excluded.remarks,
                     photoCount = excluded.photoCount,
                     createdAt = excluded.createdAt,
@@ -282,6 +320,7 @@ export const dermaDb = {
             `,
                 [
                     consultation.id,
+                    consultation.number,
                     consultation.patientId,
                     consultation.remarks,
                     consultation.photoUris.length,
@@ -320,12 +359,13 @@ export const dermaDb = {
         const args: (string | number)[] = [input.patientId];
 
         if (input.cursor) {
-            where.push("(updatedAt < ? OR (updatedAt = ? AND id < ?))");
-            args.push(input.cursor.updatedAt, input.cursor.updatedAt, input.cursor.id);
+            where.push("number < ?");
+            args.push(input.cursor.number);
         }
 
         const rows = await db.getAllAsync<{
             id: string;
+            number: number;
             patientId: string;
             remarks: string;
             photoCount: number;
@@ -333,10 +373,10 @@ export const dermaDb = {
             updatedAt: string;
         }>(
             `
-            SELECT id, patientId, remarks, photoCount, createdAt, updatedAt
+            SELECT id, number, patientId, remarks, photoCount, createdAt, updatedAt
             FROM consultations
             WHERE ${where.join(" AND ")}
-            ORDER BY updatedAt DESC, id DESC
+            ORDER BY number DESC
             LIMIT ?
         `,
             [...args, input.limit]
@@ -344,6 +384,7 @@ export const dermaDb = {
 
         const items: ConsultationIndexRow[] = rows.map((r) => ({
             id: r.id,
+            number: r.number,
             patientId: r.patientId,
             remarks: r.remarks,
             photoCount: r.photoCount,
@@ -352,13 +393,7 @@ export const dermaDb = {
         }));
 
         const last = rows.at(-1);
-        const nextCursor =
-            last && items.length === input.limit
-                ? {
-                    updatedAt: last.updatedAt,
-                    id: last.id,
-                }
-                : undefined;
+        const nextCursor = last && items.length === input.limit ? { number: last.number } : undefined;
 
         return { items, nextCursor };
     },

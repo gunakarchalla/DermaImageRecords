@@ -46,8 +46,8 @@ const loadAllConsultationsAsync = async (patientId: string) => {
     all.push(...page.items);
   }
 
-  // The index orders by updatedAt; compare is chronological, so re-sort by visit date.
-  return all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // The index already orders by consultation number, which is visit order — newest first.
+  return all;
 };
 
 /** Persisted SAF `content://` URIs don't render on Android; resolve to cache `file://` URIs. */

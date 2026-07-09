@@ -48,7 +48,7 @@ export function ConsultationPicker({
             className="text-sm font-semibold text-slate-900 dark:text-slate-100"
           >
             {selected
-              ? `${formatConsultationDate(selected.createdAt)} · ${selected.photoCount} photo${selected.photoCount === 1 ? "" : "s"}`
+              ? `#${selected.number} · ${formatConsultationDate(selected.createdAt)} · ${selected.photoCount} photo${selected.photoCount === 1 ? "" : "s"}`
               : "Select a consultation"}
           </Text>
         </View>
@@ -92,7 +92,7 @@ export function ConsultationPicker({
                   >
                     <View className="flex-1 mr-3">
                       <Text className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                        {formatConsultationDate(item.createdAt)}
+                        #{item.number} · {formatConsultationDate(item.createdAt)}
                       </Text>
                       <Text
                         numberOfLines={1}

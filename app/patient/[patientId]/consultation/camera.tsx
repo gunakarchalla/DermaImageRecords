@@ -39,6 +39,7 @@ import {
   RuleOfThirdsGrid,
 } from "../../../../components/ImmersiveControls";
 import { enqueueConsultationCapture } from "../../../../services/consultationCaptureHandoff";
+import type { ConsultationCursor } from "../../../../services/db/dermaDb";
 import { toRenderableImageUriAsync } from "../../../../services/imageUri";
 import { consultationIndexService } from "../../../../services/indexing/consultationIndexService";
 import { getConsultation } from "../../../../services/storage";
@@ -236,7 +237,7 @@ export default function ConsultationCameraScreen() {
       setLoadingGhosts(true);
       try {
         const uris: string[] = [];
-        let cursor: { updatedAt: string; id: string } | undefined;
+        let cursor: ConsultationCursor | undefined;
 
         do {
           const { items, nextCursor } =

@@ -3,6 +3,7 @@ import { Directory } from "expo-file-system";
 import { consultationsPatientLastReindexAtKey } from "../../constants/indexing";
 import { STORAGE } from "../../constants/storage";
 import type { Consultation, ConsultationIndexRow } from "../../types/models";
+import { parseConsultationNumber } from "../consultation/consultationNumber";
 import { dermaDb, type ConsultationCursor } from "../db/dermaDb";
 import { listEntriesSafe, readJsonFromDir } from "../storage/fsUtils";
 import { getExistingConsultationDir, getExistingConsultationsRootDirForPatientAsync } from "../storage/roots";
@@ -36,9 +37,15 @@ export const consultationIndexService = {
             if (consultationsRoot?.exists) {
                 const entries = listEntriesSafe(consultationsRoot).filter((e) => e instanceof Directory) as Directory[];
                 for (const dir of entries) {
+                    // The folder name *is* the consultation number, so it wins over anything the
+                    // JSON claims. A folder not named by a number cannot be a consultation.
+                    const number = parseConsultationNumber(dir.name);
+                    if (number === null) continue;
+
                     const consultation = await readJsonFromDir<Consultation>(dir, STORAGE.consultationFileName);
                     if (!consultation) continue;
-                    await dermaDb.upsertConsultationAsync(consultation);
+
+                    await dermaDb.upsertConsultationAsync({ ...consultation, id: dir.name, number, patientId });
                 }
             }
 
