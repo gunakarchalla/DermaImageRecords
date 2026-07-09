@@ -1,18 +1,23 @@
 import { Image } from "expo-image";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
+  withTiming,
 } from "react-native-reanimated";
+
+const DOUBLE_TAP_SCALE = 2.5;
 
 export type PhotoSlideProps = {
   sourceUri: string;
   width: number;
   height: number;
   isActive: boolean;
+  /** Called on a single tap that isn't part of a double tap. Used to toggle viewer chrome. */
+  onTap?: () => void;
 };
 
 /**
@@ -25,6 +30,7 @@ export function PhotoSlide({
   width,
   height,
   isActive,
+  onTap,
 }: PhotoSlideProps) {
   const [canPan, setCanPan] = useState(false);
   const scale = useSharedValue(1);
@@ -116,9 +122,52 @@ export function PhotoSlide({
     [canPan, isActive, panStartX, panStartY, scale, translateX, translateY],
   );
 
+  const handleTap = useCallback(() => {
+    onTap?.();
+  }, [onTap]);
+
+  const doubleTapGesture = useMemo(
+    () =>
+      Gesture.Tap()
+        .numberOfTaps(2)
+        .enabled(isActive)
+        .onEnd(() => {
+          const zoomedIn = scale.value > 1.02;
+          const next = zoomedIn ? 1 : DOUBLE_TAP_SCALE;
+
+          scale.value = withTiming(next, { duration: 180 });
+          savedScale.value = next;
+
+          if (zoomedIn) {
+            translateX.value = withTiming(0, { duration: 180 });
+            translateY.value = withTiming(0, { duration: 180 });
+          }
+
+          runOnJS(setCanPan)(!zoomedIn);
+        }),
+    [isActive, savedScale, scale, translateX, translateY],
+  );
+
+  const singleTapGesture = useMemo(
+    () =>
+      Gesture.Tap()
+        .numberOfTaps(1)
+        .enabled(isActive)
+        .onEnd(() => {
+          runOnJS(handleTap)();
+        }),
+    [handleTap, isActive],
+  );
+
   const composedGesture = useMemo(
-    () => Gesture.Simultaneous(pinchGesture, panGesture),
-    [panGesture, pinchGesture],
+    () =>
+      Gesture.Simultaneous(
+        pinchGesture,
+        panGesture,
+        // Exclusive so a double tap never also fires the single-tap handler.
+        Gesture.Exclusive(doubleTapGesture, singleTapGesture),
+      ),
+    [doubleTapGesture, panGesture, pinchGesture, singleTapGesture],
   );
 
   return (

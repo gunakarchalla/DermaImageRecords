@@ -1,7 +1,8 @@
 import { Feather } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import * as ImageManipulator from "expo-image-manipulator";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -9,15 +10,30 @@ import {
   FlatList,
   GestureResponderEvent,
   Pressable,
+  ScrollView,
+  StyleSheet,
   Text,
   useWindowDimensions,
   View,
+  type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from "react-native";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { SafeAreaView } from "react-native-safe-area-context";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import {
+  IMMERSIVE,
+  OverlayChip,
+  OverlayIconButton,
+  OverlayPill,
+  RuleOfThirdsGrid,
+  type FeatherName,
+} from "../../../../../components/ImmersiveControls";
 import { PhotoSlide } from "../../../../../components/PhotoSlide";
 import { toRenderableImageUriAsync } from "../../../../../services/imageUri";
 import {
@@ -33,15 +49,182 @@ type CropRect = {
   height: number;
 };
 
+type Size = { width: number; height: number };
+
 type ResizeCorner = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
+
+const MIN_CROP_SIZE = 56;
+const HANDLE_SIZE = 44;
+const THUMB_SIZE = 56;
+const CROP_CANVAS_PADDING = 12;
+
+/** `null` is a free-form crop; the numbers are width / height. */
+const ASPECT_PRESETS: { label: string; value: number | null }[] = [
+  { label: "Free", value: null },
+  { label: "1:1", value: 1 },
+  { label: "4:3", value: 4 / 3 },
+  { label: "3:4", value: 3 / 4 },
+];
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.max(min, Math.min(max, value));
+
+/** Letterboxed rect the image actually occupies inside a `contentFit="contain"` canvas. */
+const computeImageFrame = (canvas: Size, image: Size): CropRect => {
+  const imageAspect = image.width / image.height;
+  const canvasAspect = canvas.width / canvas.height;
+
+  if (imageAspect > canvasAspect) {
+    const frameHeight = canvas.width / imageAspect;
+    return {
+      x: 0,
+      y: (canvas.height - frameHeight) / 2,
+      width: canvas.width,
+      height: frameHeight,
+    };
+  }
+
+  const frameWidth = canvas.height * imageAspect;
+  return {
+    x: (canvas.width - frameWidth) / 2,
+    y: 0,
+    width: frameWidth,
+    height: canvas.height,
+  };
+};
+
+/** Starting crop rectangle: inset from the image frame, honouring a locked aspect ratio. */
+const fitCropRect = (frame: CropRect, aspect: number | null): CropRect => {
+  if (aspect === null) {
+    const marginX = frame.width * 0.12;
+    const marginY = frame.height * 0.12;
+    return {
+      x: frame.x + marginX,
+      y: frame.y + marginY,
+      width: Math.max(MIN_CROP_SIZE, frame.width - marginX * 2),
+      height: Math.max(MIN_CROP_SIZE, frame.height - marginY * 2),
+    };
+  }
+
+  const maxWidth = frame.width * 0.86;
+  const maxHeight = frame.height * 0.86;
+
+  let width = maxWidth;
+  let height = width / aspect;
+  if (height > maxHeight) {
+    height = maxHeight;
+    width = height * aspect;
+  }
+
+  return {
+    x: frame.x + (frame.width - width) / 2,
+    y: frame.y + (frame.height - height) / 2,
+    width,
+    height,
+  };
+};
+
+/** Corner bracket + invisible 44pt touch target, centred on the crop corner. */
+function CropHandle({
+  corner,
+  rect,
+  onGrant,
+  onMove,
+  onRelease,
+}: {
+  corner: ResizeCorner;
+  rect: CropRect;
+  onGrant: (corner: ResizeCorner, event: GestureResponderEvent) => void;
+  onMove: (event: GestureResponderEvent) => void;
+  onRelease: () => void;
+}) {
+  const isLeft = corner === "topLeft" || corner === "bottomLeft";
+  const isTop = corner === "topLeft" || corner === "topRight";
+
+  const cornerX = isLeft ? rect.x : rect.x + rect.width;
+  const cornerY = isTop ? rect.y : rect.y + rect.height;
+
+  const bracket = {
+    backgroundColor: IMMERSIVE.hairline,
+    position: "absolute" as const,
+    borderRadius: 2,
+    ...(isLeft ? { left: HANDLE_SIZE / 2 - 3 } : { right: HANDLE_SIZE / 2 - 3 }),
+    ...(isTop ? { top: HANDLE_SIZE / 2 - 3 } : { bottom: HANDLE_SIZE / 2 - 3 }),
+  };
+
+  return (
+    <View
+      onStartShouldSetResponder={() => true}
+      onResponderGrant={(event) => onGrant(corner, event)}
+      onResponderMove={onMove}
+      onResponderRelease={onRelease}
+      onResponderTerminate={onRelease}
+      hitSlop={10}
+      accessibilityLabel={`Resize crop from ${corner}`}
+      style={{
+        position: "absolute",
+        left: cornerX - HANDLE_SIZE / 2,
+        top: cornerY - HANDLE_SIZE / 2,
+        width: HANDLE_SIZE,
+        height: HANDLE_SIZE,
+      }}
+    >
+      <View pointerEvents="none" style={{ ...bracket, width: 22, height: 3 }} />
+      <View pointerEvents="none" style={{ ...bracket, width: 3, height: 22 }} />
+    </View>
+  );
+}
+
+/** Labelled icon action in the viewer's bottom bar. */
+function ActionButton({
+  icon,
+  label,
+  onPress,
+  disabled,
+  tone = "default",
+}: {
+  icon: FeatherName;
+  label: string;
+  onPress: () => void;
+  disabled: boolean;
+  tone?: "default" | "danger";
+}) {
+  const color = disabled
+    ? IMMERSIVE.iconMuted
+    : tone === "danger"
+      ? IMMERSIVE.danger
+      : IMMERSIVE.icon;
+
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      className="flex-1 items-center py-1"
+      style={{ opacity: disabled ? 0.5 : 1 }}
+    >
+      <Feather name={icon} size={22} color={color} />
+      <Text className="mt-1 text-xs font-medium" style={{ color }}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
 
 export default function ConsultationPhotosScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
-  const listRef = useRef<FlatList<string>>(null);
+
+  const pagerRef = useRef<FlatList<string>>(null);
+  const stripRef = useRef<FlatList<string>>(null);
   const cropStartRectRef = useRef<CropRect | null>(null);
   const cropDragModeRef = useRef<"move" | ResizeCorner | null>(null);
   const cropDragStartRef = useRef<{ x: number; y: number } | null>(null);
+  // Distinguishes a page change the user swiped to from one we need to scroll to.
+  const scrollSourceRef = useRef<"user" | "code">("code");
+  const photoCountRef = useRef(0);
 
   const { patientId, consultationId, index } = useLocalSearchParams<{
     patientId: string;
@@ -56,60 +239,57 @@ export default function ConsultationPhotosScreen() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [mutating, setMutating] = useState(false);
+  const [chromeVisible, setChromeVisible] = useState(true);
+
   const [isCropping, setIsCropping] = useState(false);
   const [cropRect, setCropRect] = useState<CropRect | null>(null);
-  const [cropImageSize, setCropImageSize] = useState<{
-    width: number;
-    height: number;
-  } | null>(null);
+  const [cropAspect, setCropAspect] = useState<number | null>(null);
+  const [cropImageSize, setCropImageSize] = useState<Size | null>(null);
+  const [cropCanvas, setCropCanvas] = useState<Size | null>(null);
   // Renderable file:// URI the crop was measured against; manipulation must use
   // the same source so pixel coordinates map 1:1 (content:// URIs are unreliable
   // for RNImage.getSize and can decode at a downscaled size on Android).
   const [cropSourceUri, setCropSourceUri] = useState<string | null>(null);
 
-  const photoViewerHeight = Math.max(220, height - 180);
-  const cropCanvasWidth = Math.max(100, width - 24);
-  const cropCanvasHeight = Math.max(100, photoViewerHeight - 24);
-  const actionRowSlotWidth = 52;
+  // Chrome heights are measured rather than hardcoded, so the crop canvas always
+  // lands exactly between the two bars whatever they contain.
+  const [topBarHeight, setTopBarHeight] = useState(0);
+  const [bottomBarHeight, setBottomBarHeight] = useState(0);
 
-  const clamp = (value: number, min: number, max: number) =>
-    Math.max(min, Math.min(max, value));
+  const photoUris = useMemo(
+    () => consultation?.photoUris ?? [],
+    [consultation?.photoUris],
+  );
+  const currentPhotoUri = photoUris[activeIndex];
 
-  const currentPhotoUri = consultation?.photoUris?.[activeIndex];
+  const showChrome = isCropping || chromeVisible;
+  const chromeOpacity = useSharedValue(1);
+  const chromeStyle = useAnimatedStyle(() => ({ opacity: chromeOpacity.value }));
 
-  const cropImageFrame = useMemo(() => {
-    if (!cropImageSize) return null;
+  useEffect(() => {
+    chromeOpacity.value = withTiming(showChrome ? 1 : 0, { duration: 180 });
+  }, [chromeOpacity, showChrome]);
 
-    const imageAspect = cropImageSize.width / cropImageSize.height;
-    const canvasAspect = cropCanvasWidth / cropCanvasHeight;
+  const cropImageFrame = useMemo(
+    () =>
+      cropCanvas && cropImageSize
+        ? computeImageFrame(cropCanvas, cropImageSize)
+        : null,
+    [cropCanvas, cropImageSize],
+  );
 
-    if (imageAspect > canvasAspect) {
-      const frameWidth = cropCanvasWidth;
-      const frameHeight = frameWidth / imageAspect;
-      return {
-        x: 0,
-        y: (cropCanvasHeight - frameHeight) / 2,
-        width: frameWidth,
-        height: frameHeight,
-      };
-    }
+  // Re-seeds the rect when the canvas settles (the crop bar is taller than the
+  // viewer bar, so the frame changes once on entry) and when the ratio changes.
+  useEffect(() => {
+    if (!isCropping || !cropImageFrame) return;
+    setCropRect(fitCropRect(cropImageFrame, cropAspect));
+  }, [cropAspect, cropImageFrame, isCropping]);
 
-    const frameHeight = cropCanvasHeight;
-    const frameWidth = frameHeight * imageAspect;
-    return {
-      x: (cropCanvasWidth - frameWidth) / 2,
-      y: 0,
-      width: frameWidth,
-      height: frameHeight,
-    };
-  }, [cropCanvasHeight, cropCanvasWidth, cropImageSize]);
-
-  const resolveDisplayUris = useCallback(async (photoUris: string[]) => {
+  const resolveDisplayUris = useCallback(async (uris: string[]) => {
     const entries = await Promise.all(
-      photoUris.map(async (uri) => {
+      uris.map(async (uri) => {
         try {
-          const displayUri = await toRenderableImageUriAsync(uri);
-          return [uri, displayUri] as const;
+          return [uri, await toRenderableImageUriAsync(uri)] as const;
         } catch {
           return [uri, undefined] as const;
         }
@@ -135,13 +315,11 @@ export default function ConsultationPhotosScreen() {
     await resolveDisplayUris(data.photoUris);
 
     const parsedIndex = Number(index ?? "0");
-    const safeIndex = Number.isFinite(parsedIndex)
-      ? Math.max(
-          0,
-          Math.min(data.photoUris.length - 1, Math.floor(parsedIndex)),
-        )
-      : 0;
-    setActiveIndex(safeIndex);
+    setActiveIndex(
+      Number.isFinite(parsedIndex)
+        ? clamp(Math.floor(parsedIndex), 0, data.photoUris.length - 1)
+        : 0,
+    );
 
     setLoading(false);
   }, [consultationId, index, patientId, resolveDisplayUris]);
@@ -150,29 +328,52 @@ export default function ConsultationPhotosScreen() {
     void load();
   }, [load]);
 
+  // The scroll below lands a frame later, by which time a delete may have shrunk
+  // the list again. Both lists read the live count instead of trusting the index.
   useEffect(() => {
-    const photoCount = consultation?.photoUris?.length ?? 0;
-    if (!photoCount || isCropping) return;
+    photoCountRef.current = photoUris.length;
+  }, [photoUris.length]);
 
-    const safeIndex = Math.max(0, Math.min(photoCount - 1, activeIndex));
+  const scrollToIndex = useCallback((next: number) => {
+    scrollSourceRef.current = "code";
+    requestAnimationFrame(() => {
+      if (next >= photoCountRef.current) return;
+      pagerRef.current?.scrollToIndex({ index: next, animated: false });
+    });
+  }, []);
+
+  // Keep the filmstrip's active thumbnail in view, and re-sync the pager when the
+  // index moved for a reason other than the user swiping (delete, filmstrip tap).
+  useEffect(() => {
+    if (!photoUris.length || isCropping) return;
+
+    // A shrinking list can leave `activeIndex` past the end for one render.
+    // Correct it and let the next pass do the scrolling.
+    const safeIndex = clamp(activeIndex, 0, photoUris.length - 1);
     if (safeIndex !== activeIndex) {
       setActiveIndex(safeIndex);
       return;
     }
 
-    requestAnimationFrame(() => {
-      listRef.current?.scrollToIndex({ index: safeIndex, animated: false });
+    stripRef.current?.scrollToIndex({
+      index: safeIndex,
+      animated: true,
+      viewPosition: 0.5,
     });
-  }, [activeIndex, consultation?.photoUris, isCropping]);
+
+    if (scrollSourceRef.current === "user") {
+      scrollSourceRef.current = "code";
+      return;
+    }
+
+    scrollToIndex(safeIndex);
+  }, [activeIndex, isCropping, photoUris.length, scrollToIndex]);
 
   const onMomentumEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const current = Math.round(event.nativeEvent.contentOffset.x / width);
-    if (!consultation) return;
-    const safe = Math.max(
-      0,
-      Math.min(consultation.photoUris.length - 1, current),
-    );
-    setActiveIndex(safe);
+    if (!photoUris.length) return;
+    const next = Math.round(event.nativeEvent.contentOffset.x / width);
+    scrollSourceRef.current = "user";
+    setActiveIndex(clamp(next, 0, photoUris.length - 1));
   };
 
   const updateConsultationPhotos = useCallback(
@@ -191,17 +392,12 @@ export default function ConsultationPhotosScreen() {
           return;
         }
 
+        // Both setters must land in the same commit. If the list shrinks before
+        // the index follows, the sync effect below sees an index past the end.
+        setActiveIndex(clamp(preferredIndex, 0, updated.photoUris.length - 1));
         setConsultation(updated);
-        await resolveDisplayUris(updated.photoUris);
 
-        const nextIndex = Math.max(
-          0,
-          Math.min(updated.photoUris.length - 1, preferredIndex),
-        );
-        setActiveIndex(nextIndex);
-        requestAnimationFrame(() => {
-          listRef.current?.scrollToIndex({ index: nextIndex, animated: false });
-        });
+        await resolveDisplayUris(updated.photoUris);
       } catch {
         Alert.alert("Update failed", "Could not update the photo.");
       } finally {
@@ -214,7 +410,9 @@ export default function ConsultationPhotosScreen() {
   const discardCropMode = useCallback(() => {
     setIsCropping(false);
     setCropRect(null);
+    setCropAspect(null);
     setCropImageSize(null);
+    setCropCanvas(null);
     setCropSourceUri(null);
   }, []);
 
@@ -234,62 +432,46 @@ export default function ConsultationPhotosScreen() {
       // first crop map to the wrong region. The normalized output has identity
       // orientation, and its reported width/height are the authoritative oriented
       // pixel dimensions — so measuring and cropping against it always agree.
-      const normalized = await ImageManipulator.manipulateAsync(renderableUri, [], {
-        compress: 1,
-        format: ImageManipulator.SaveFormat.JPEG,
-      });
+      const normalized = await ImageManipulator.manipulateAsync(
+        renderableUri,
+        [],
+        { compress: 1, format: ImageManipulator.SaveFormat.JPEG },
+      );
 
-      const imageSize = { width: normalized.width, height: normalized.height };
-      setCropImageSize(imageSize);
+      setCropImageSize({ width: normalized.width, height: normalized.height });
       setCropSourceUri(normalized.uri);
-
-      const imageAspect = imageSize.width / imageSize.height;
-      const canvasAspect = cropCanvasWidth / cropCanvasHeight;
-
-      const frame =
-        imageAspect > canvasAspect
-          ? {
-              x: 0,
-              y: (cropCanvasHeight - cropCanvasWidth / imageAspect) / 2,
-              width: cropCanvasWidth,
-              height: cropCanvasWidth / imageAspect,
-            }
-          : {
-              x: (cropCanvasWidth - cropCanvasHeight * imageAspect) / 2,
-              y: 0,
-              width: cropCanvasHeight * imageAspect,
-              height: cropCanvasHeight,
-            };
-
-      const marginX = frame.width * 0.15;
-      const marginY = frame.height * 0.15;
-
-      setCropRect({
-        x: frame.x + marginX,
-        y: frame.y + marginY,
-        width: Math.max(56, frame.width - marginX * 2),
-        height: Math.max(56, frame.height - marginY * 2),
-      });
+      setCropAspect(null);
       setIsCropping(true);
     } catch {
-      Alert.alert(
-        "Crop unavailable",
-        "Could not load this image for cropping.",
-      );
+      Alert.alert("Crop unavailable", "Could not load this image for cropping.");
     }
-  }, [cropCanvasHeight, cropCanvasWidth, currentPhotoUri, displayUris]);
+  }, [currentPhotoUri, displayUris]);
+
+  const onCropCanvasLayout = useCallback((event: LayoutChangeEvent) => {
+    const { width: nextWidth, height: nextHeight } = event.nativeEvent.layout;
+    setCropCanvas((prev) =>
+      prev?.width === nextWidth && prev?.height === nextHeight
+        ? prev
+        : { width: nextWidth, height: nextHeight },
+    );
+  }, []);
 
   const updateCropRectByMove = useCallback(
     (dx: number, dy: number) => {
-      if (!cropStartRectRef.current || !cropImageFrame) return;
-
       const start = cropStartRectRef.current;
-      const maxX = cropImageFrame.x + cropImageFrame.width - start.width;
-      const maxY = cropImageFrame.y + cropImageFrame.height - start.height;
+      if (!start || !cropImageFrame) return;
 
       setCropRect({
-        x: clamp(start.x + dx, cropImageFrame.x, maxX),
-        y: clamp(start.y + dy, cropImageFrame.y, maxY),
+        x: clamp(
+          start.x + dx,
+          cropImageFrame.x,
+          cropImageFrame.x + cropImageFrame.width - start.width,
+        ),
+        y: clamp(
+          start.y + dy,
+          cropImageFrame.y,
+          cropImageFrame.y + cropImageFrame.height - start.height,
+        ),
         width: start.width,
         height: start.height,
       });
@@ -299,42 +481,47 @@ export default function ConsultationPhotosScreen() {
 
   const updateCropRectFromCornerDrag = useCallback(
     (corner: ResizeCorner, dx: number, dy: number) => {
-      if (!cropStartRectRef.current || !cropImageFrame) return;
-
       const start = cropStartRectRef.current;
-      const minSize = 56;
-      const frameLeft = cropImageFrame.x;
-      const frameTop = cropImageFrame.y;
-      const frameRight = cropImageFrame.x + cropImageFrame.width;
-      const frameBottom = cropImageFrame.y + cropImageFrame.height;
+      if (!start || !cropImageFrame) return;
 
-      let left = start.x;
-      let top = start.y;
-      let right = start.x + start.width;
-      let bottom = start.y + start.height;
+      const isLeft = corner === "topLeft" || corner === "bottomLeft";
+      const isTop = corner === "topLeft" || corner === "topRight";
 
-      if (corner === "topLeft") {
-        left = clamp(start.x + dx, frameLeft, right - minSize);
-        top = clamp(start.y + dy, frameTop, bottom - minSize);
-      } else if (corner === "topRight") {
-        right = clamp(start.x + start.width + dx, left + minSize, frameRight);
-        top = clamp(start.y + dy, frameTop, bottom - minSize);
-      } else if (corner === "bottomLeft") {
-        left = clamp(start.x + dx, frameLeft, right - minSize);
-        bottom = clamp(start.y + start.height + dy, top + minSize, frameBottom);
-      } else {
-        right = clamp(start.x + start.width + dx, left + minSize, frameRight);
-        bottom = clamp(start.y + start.height + dy, top + minSize, frameBottom);
+      // The corner opposite the one being dragged stays pinned.
+      const anchorX = isLeft ? start.x + start.width : start.x;
+      const anchorY = isTop ? start.y + start.height : start.y;
+      const movingX = (isLeft ? start.x : start.x + start.width) + dx;
+      const movingY = (isTop ? start.y : start.y + start.height) + dy;
+
+      const spaceX = isLeft
+        ? anchorX - cropImageFrame.x
+        : cropImageFrame.x + cropImageFrame.width - anchorX;
+      const spaceY = isTop
+        ? anchorY - cropImageFrame.y
+        : cropImageFrame.y + cropImageFrame.height - anchorY;
+
+      let nextWidth = clamp(Math.abs(movingX - anchorX), MIN_CROP_SIZE, spaceX);
+      let nextHeight = clamp(Math.abs(movingY - anchorY), MIN_CROP_SIZE, spaceY);
+
+      if (cropAspect) {
+        // Width leads; fall back to height-leads when the derived height would
+        // overflow the space left between the anchor and the image edge.
+        nextHeight = nextWidth / cropAspect;
+        if (nextHeight > spaceY || nextHeight < MIN_CROP_SIZE) {
+          nextHeight = clamp(nextHeight, MIN_CROP_SIZE, spaceY);
+          nextWidth = clamp(nextHeight * cropAspect, MIN_CROP_SIZE, spaceX);
+          nextHeight = nextWidth / cropAspect;
+        }
       }
 
       setCropRect({
-        x: left,
-        y: top,
-        width: right - left,
-        height: bottom - top,
+        x: isLeft ? anchorX - nextWidth : anchorX,
+        y: isTop ? anchorY - nextHeight : anchorY,
+        width: nextWidth,
+        height: nextHeight,
       });
     },
-    [cropImageFrame],
+    [cropAspect, cropImageFrame],
   );
 
   const startCropDrag = useCallback(
@@ -413,16 +600,7 @@ export default function ConsultationPhotosScreen() {
 
       const result = await ImageManipulator.manipulateAsync(
         cropSourceUri,
-        [
-          {
-            crop: {
-              originX,
-              originY,
-              width: cropWidth,
-              height: cropHeight,
-            },
-          },
-        ],
+        [{ crop: { originX, originY, width: cropWidth, height: cropHeight } }],
         { compress: 1, format: ImageManipulator.SaveFormat.JPEG },
       );
 
@@ -430,6 +608,7 @@ export default function ConsultationPhotosScreen() {
         idx === activeIndex ? result.uri : uri,
       );
 
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       await updateConsultationPhotos(next, activeIndex);
       discardCropMode();
     } catch {
@@ -448,11 +627,37 @@ export default function ConsultationPhotosScreen() {
     updateConsultationPhotos,
   ]);
 
+  const handleRotate = async () => {
+    if (isCropping || !consultation || !currentPhotoUri) return;
+
+    setMutating(true);
+    try {
+      // Rotate the renderable copy: ImageManipulator can't read the persisted
+      // SAF content:// URI on Android.
+      const sourceUri =
+        displayUris[currentPhotoUri] ??
+        (await toRenderableImageUriAsync(currentPhotoUri)) ??
+        currentPhotoUri;
+
+      const result = await ImageManipulator.manipulateAsync(
+        sourceUri,
+        [{ rotate: -90 }],
+        { compress: 1, format: ImageManipulator.SaveFormat.JPEG },
+      );
+
+      const next = consultation.photoUris.map((uri, idx) =>
+        idx === activeIndex ? result.uri : uri,
+      );
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await updateConsultationPhotos(next, activeIndex);
+    } catch {
+      Alert.alert("Rotate failed", "We could not rotate this photo.");
+      setMutating(false);
+    }
+  };
+
   const handleDelete = () => {
-    if (isCropping) return;
-    if (!consultation) return;
-    const currentUri = consultation.photoUris[activeIndex];
-    if (!currentUri) return;
+    if (isCropping || !consultation || !currentPhotoUri) return;
 
     Alert.alert(
       "Delete photo",
@@ -463,325 +668,410 @@ export default function ConsultationPhotosScreen() {
           text: "Delete",
           style: "destructive",
           onPress: () => {
+            void Haptics.notificationAsync(
+              Haptics.NotificationFeedbackType.Warning,
+            );
             const next = consultation.photoUris.filter(
-              (uri) => uri !== currentUri,
+              (uri) => uri !== currentPhotoUri,
             );
-            const nextIndex = Math.min(
-              activeIndex,
-              Math.max(0, next.length - 1),
+            void updateConsultationPhotos(
+              next,
+              Math.min(activeIndex, Math.max(0, next.length - 1)),
             );
-            void updateConsultationPhotos(next, nextIndex);
           },
         },
       ],
     );
   };
 
-  const handleRotate = async () => {
-    if (isCropping) return;
-    if (!consultation) return;
-    const currentUri = consultation.photoUris[activeIndex];
-    if (!currentUri) return;
-
-    setMutating(true);
-    try {
-      const result = await ImageManipulator.manipulateAsync(
-        currentUri,
-        [{ rotate: -90 }],
-        { compress: 1, format: ImageManipulator.SaveFormat.JPEG },
-      );
-
-      const next = consultation.photoUris.map((uri, idx) =>
-        idx === activeIndex ? result.uri : uri,
-      );
-      await updateConsultationPhotos(next, activeIndex);
-    } catch {
-      Alert.alert("Rotate failed", "We could not rotate this photo.");
-      setMutating(false);
-    }
-  };
+  const screenOptions = (
+    <Stack.Screen
+      options={{ headerShown: false, gestureEnabled: false, animation: "fade" }}
+    />
+  );
 
   if (loading) {
     return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-black">
-        <ActivityIndicator size="large" color="#e2e8f0" />
-      </SafeAreaView>
+      <View className="flex-1 items-center justify-center bg-black">
+        {screenOptions}
+        <ActivityIndicator size="large" color={IMMERSIVE.icon} />
+      </View>
     );
   }
 
-  if (!consultation || consultation.photoUris.length === 0) {
+  if (photoUris.length === 0) {
     return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-black">
-        <Text className="text-slate-200">No photos found.</Text>
-        <Pressable
-          className="mt-4 px-4 py-2 rounded-lg bg-slate-200"
-          onPress={() => router.back()}
+      <View className="flex-1 items-center justify-center px-8 bg-black">
+        {screenOptions}
+        <View
+          className="h-16 w-16 items-center justify-center rounded-full"
+          style={{ backgroundColor: IMMERSIVE.control }}
         >
-          <Text className="text-slate-900 font-semibold">Back</Text>
+          <Feather name="image" size={26} color={IMMERSIVE.icon} />
+        </View>
+        <Text className="mt-5 text-lg font-semibold text-slate-100">
+          No photos
+        </Text>
+        <Text className="mt-2 text-center text-sm" style={{ color: IMMERSIVE.label }}>
+          This consultation has no photos to show.
+        </Text>
+        <Pressable
+          onPress={() => router.back()}
+          accessibilityLabel="Go back"
+          className="mt-6 rounded-xl px-6 py-3"
+          style={{ backgroundColor: IMMERSIVE.active }}
+        >
+          <Text
+            className="text-base font-semibold"
+            style={{ color: IMMERSIVE.onActive }}
+          >
+            Back
+          </Text>
         </Pressable>
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <GestureHandlerRootView className="flex-1 bg-black">
-      <SafeAreaView className="flex-1 bg-black">
-        <View className="flex-row items-center justify-between px-4 py-2">
-          <Pressable
-            onPress={() => {
-              if (isCropping) {
-                discardCropMode();
-                return;
-              }
+    <View className="flex-1 bg-black">
+      {screenOptions}
 
-              router.back();
-            }}
-            accessibilityLabel="Back"
-            className="p-2"
-          >
-            <Feather name="arrow-left" size={22} color="#e2e8f0" />
-          </Pressable>
-          <Text className="text-slate-200 text-sm">
-            {activeIndex + 1} / {consultation.photoUris.length}
-          </Text>
-          <View className="w-9" />
-        </View>
+      {isCropping ? (
+        <View
+          onLayout={onCropCanvasLayout}
+          style={{
+            position: "absolute",
+            top: topBarHeight + CROP_CANVAS_PADDING,
+            bottom: bottomBarHeight + CROP_CANVAS_PADDING,
+            left: CROP_CANVAS_PADDING,
+            right: CROP_CANVAS_PADDING,
+          }}
+        >
+          {currentPhotoUri ? (
+            <Image
+              source={{ uri: displayUris[currentPhotoUri] ?? currentPhotoUri }}
+              style={StyleSheet.absoluteFill}
+              contentFit="contain"
+            />
+          ) : null}
 
-        {isCropping && currentPhotoUri && cropRect && cropImageFrame ? (
-          <View className="flex-1 w-full items-center">
-            {/* Keep crop mode in the same viewport geometry as PhotoSlide to avoid visual jumps. */}
-            <View
-              style={{ width, height: photoViewerHeight }}
-              className="items-center justify-center px-3"
-            >
+          {cropRect ? (
+            <>
+              {/* Dim everything outside the crop rectangle. */}
               <View
-                style={{ width: cropCanvasWidth, height: cropCanvasHeight }}
-                className="relative"
-              >
-                <Image
-                  source={{
-                    uri: displayUris[currentPhotoUri] ?? currentPhotoUri,
-                  }}
-                  style={{ width: cropCanvasWidth, height: cropCanvasHeight }}
-                  contentFit="contain"
-                />
-
-                <View
-                  onStartShouldSetResponder={() => true}
-                  onResponderGrant={(event) => startCropDrag("move", event)}
-                  onResponderMove={onCropDragMove}
-                  onResponderRelease={endCropDrag}
-                  onResponderTerminate={endCropDrag}
-                  style={{
-                    position: "absolute",
-                    left: cropRect.x,
-                    top: cropRect.y,
-                    width: cropRect.width,
-                    height: cropRect.height,
-                    borderWidth: 2,
-                    borderColor: "#e2e8f0",
-                    backgroundColor: "rgba(255,255,255,0.06)",
-                  }}
-                />
-
-                <View
-                  onStartShouldSetResponder={() => true}
-                  onResponderGrant={(event) => startCropDrag("topLeft", event)}
-                  onResponderMove={onCropDragMove}
-                  onResponderRelease={endCropDrag}
-                  onResponderTerminate={endCropDrag}
-                  hitSlop={12}
-                  style={{
-                    position: "absolute",
-                    left: cropRect.x - 14,
-                    top: cropRect.y - 14,
-                    width: 28,
-                    height: 28,
-                    borderRadius: 14,
-                    backgroundColor: "#e2e8f0",
-                  }}
-                />
-
-                <View
-                  onStartShouldSetResponder={() => true}
-                  onResponderGrant={(event) => startCropDrag("topRight", event)}
-                  onResponderMove={onCropDragMove}
-                  onResponderRelease={endCropDrag}
-                  onResponderTerminate={endCropDrag}
-                  hitSlop={12}
-                  style={{
-                    position: "absolute",
-                    left: cropRect.x + cropRect.width - 14,
-                    top: cropRect.y - 14,
-                    width: 28,
-                    height: 28,
-                    borderRadius: 14,
-                    backgroundColor: "#e2e8f0",
-                  }}
-                />
-
-                <View
-                  onStartShouldSetResponder={() => true}
-                  onResponderGrant={(event) =>
-                    startCropDrag("bottomLeft", event)
-                  }
-                  onResponderMove={onCropDragMove}
-                  onResponderRelease={endCropDrag}
-                  onResponderTerminate={endCropDrag}
-                  hitSlop={12}
-                  style={{
-                    position: "absolute",
-                    left: cropRect.x - 14,
-                    top: cropRect.y + cropRect.height - 14,
-                    width: 28,
-                    height: 28,
-                    borderRadius: 14,
-                    backgroundColor: "#e2e8f0",
-                  }}
-                />
-
-                <View
-                  onStartShouldSetResponder={() => true}
-                  onResponderGrant={(event) =>
-                    startCropDrag("bottomRight", event)
-                  }
-                  onResponderMove={onCropDragMove}
-                  onResponderRelease={endCropDrag}
-                  onResponderTerminate={endCropDrag}
-                  hitSlop={12}
-                  style={{
-                    position: "absolute",
-                    left: cropRect.x + cropRect.width - 14,
-                    top: cropRect.y + cropRect.height - 14,
-                    width: 28,
-                    height: 28,
-                    borderRadius: 14,
-                    backgroundColor: "#e2e8f0",
-                  }}
-                />
-              </View>
-            </View>
-          </View>
-        ) : (
-          <FlatList
-            ref={listRef}
-            style={{ flex: 1 }}
-            data={consultation.photoUris}
-            horizontal
-            pagingEnabled
-            scrollEnabled={!mutating}
-            keyExtractor={(item) => item}
-            showsHorizontalScrollIndicator={false}
-            onMomentumScrollEnd={onMomentumEnd}
-            onScrollToIndexFailed={(info) => {
-              // Defensive fallback for rapid list mutations (e.g., delete while paging).
-              const safeIndex = Math.max(
-                0,
-                Math.min(info.index, info.highestMeasuredFrameIndex),
-              );
-              requestAnimationFrame(() => {
-                listRef.current?.scrollToIndex({
-                  index: safeIndex,
-                  animated: false,
-                });
-              });
-            }}
-            getItemLayout={(_, listIndex) => ({
-              length: width,
-              offset: width * listIndex,
-              index: listIndex,
-            })}
-            renderItem={({ item, index: itemIndex }) => (
-              <PhotoSlide
-                sourceUri={displayUris[item] ?? item}
-                width={width}
-                height={photoViewerHeight}
-                isActive={itemIndex === activeIndex}
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  height: cropRect.y,
+                  backgroundColor: "rgba(2,6,23,0.6)",
+                }}
               />
-            )}
-          />
-        )}
-
-        <View className="bg-black/70 py-3 px-6">
-          {isCropping ? (
-            <View className="flex-row items-center justify-between">
-              <Pressable
-                disabled={mutating}
-                onPress={discardCropMode}
-                accessibilityLabel="Discard crop"
-                style={{ minWidth: actionRowSlotWidth + 28 }}
-                className="items-center justify-center px-4 py-3 rounded-lg border border-slate-400"
-              >
-                <Text className="text-slate-200 font-semibold">Discard</Text>
-              </Pressable>
-
-              <View style={{ width: actionRowSlotWidth }} />
-
-              <Pressable
-                disabled={mutating}
-                onPress={() => {
-                  void saveCrop();
+              <View
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  top: cropRect.y + cropRect.height,
+                  bottom: 0,
+                  backgroundColor: "rgba(2,6,23,0.6)",
                 }}
-                accessibilityLabel="Save crop"
-                style={{ minWidth: actionRowSlotWidth + 28 }}
-                className="items-center justify-center px-4 py-3 rounded-lg bg-slate-200"
-              >
-                <Text className="text-slate-900 font-semibold">Save</Text>
-              </Pressable>
-            </View>
-          ) : (
-            <View className="flex-row items-center justify-between">
-              <Pressable
-                disabled={mutating}
-                onPress={() => {
-                  void beginCropMode();
+              />
+              <View
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  top: cropRect.y,
+                  width: cropRect.x,
+                  height: cropRect.height,
+                  backgroundColor: "rgba(2,6,23,0.6)",
                 }}
-                accessibilityLabel="Crop photo"
-                className="p-3"
-              >
-                <Feather
-                  name="crop"
-                  size={24}
-                  color={mutating ? "#94a3b8" : "#e2e8f0"}
-                />
-              </Pressable>
+              />
+              <View
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  left: cropRect.x + cropRect.width,
+                  right: 0,
+                  top: cropRect.y,
+                  height: cropRect.height,
+                  backgroundColor: "rgba(2,6,23,0.6)",
+                }}
+              />
 
-              <Pressable
-                disabled={mutating}
-                onPress={handleRotate}
-                accessibilityLabel="Rotate photo anticlockwise"
-                className="p-3"
+              <View
+                onStartShouldSetResponder={() => true}
+                onResponderGrant={(event) => startCropDrag("move", event)}
+                onResponderMove={onCropDragMove}
+                onResponderRelease={endCropDrag}
+                onResponderTerminate={endCropDrag}
+                accessibilityLabel="Move crop area"
+                style={{
+                  position: "absolute",
+                  left: cropRect.x,
+                  top: cropRect.y,
+                  width: cropRect.width,
+                  height: cropRect.height,
+                  borderWidth: 1,
+                  borderColor: "rgba(226,232,240,0.7)",
+                }}
               >
-                <Feather
-                  name="rotate-ccw"
-                  size={24}
-                  color={mutating ? "#94a3b8" : "#e2e8f0"}
-                />
-              </Pressable>
+                <RuleOfThirdsGrid inset />
+              </View>
 
-              <Pressable
-                disabled={mutating}
-                onPress={handleDelete}
-                accessibilityLabel="Delete photo"
-                className="p-3"
-              >
-                <Feather
-                  name="trash-2"
-                  size={24}
-                  color={mutating ? "#94a3b8" : "#f87171"}
+              {(
+                [
+                  "topLeft",
+                  "topRight",
+                  "bottomLeft",
+                  "bottomRight",
+                ] as ResizeCorner[]
+              ).map((corner) => (
+                <CropHandle
+                  key={corner}
+                  corner={corner}
+                  rect={cropRect}
+                  onGrant={startCropDrag}
+                  onMove={onCropDragMove}
+                  onRelease={endCropDrag}
                 />
-              </Pressable>
-            </View>
-          )}
-
-          {mutating ? (
-            <View className="flex-row items-center justify-center mt-3">
-              <ActivityIndicator size="small" color="#e2e8f0" />
-              <Text className="text-slate-100 ml-2">Working...</Text>
-            </View>
+              ))}
+            </>
           ) : null}
         </View>
-      </SafeAreaView>
-    </GestureHandlerRootView>
+      ) : (
+        <FlatList
+          ref={pagerRef}
+          style={StyleSheet.absoluteFill}
+          data={photoUris}
+          horizontal
+          pagingEnabled
+          scrollEnabled={!mutating}
+          keyExtractor={(item) => item}
+          showsHorizontalScrollIndicator={false}
+          onMomentumScrollEnd={onMomentumEnd}
+          onScrollToIndexFailed={(info) => {
+            // Defensive fallback for rapid list mutations (e.g., delete while paging).
+            const safeIndex = Math.max(
+              0,
+              Math.min(info.index, info.highestMeasuredFrameIndex),
+            );
+            requestAnimationFrame(() => {
+              pagerRef.current?.scrollToIndex({
+                index: safeIndex,
+                animated: false,
+              });
+            });
+          }}
+          getItemLayout={(_, listIndex) => ({
+            length: width,
+            offset: width * listIndex,
+            index: listIndex,
+          })}
+          renderItem={({ item, index: itemIndex }) => (
+            <PhotoSlide
+              sourceUri={displayUris[item] ?? item}
+              width={width}
+              height={height}
+              isActive={itemIndex === activeIndex}
+              onTap={() => setChromeVisible((prev) => !prev)}
+            />
+          )}
+        />
+      )}
+
+      {/* Top chrome */}
+      <Animated.View
+        pointerEvents={showChrome ? "box-none" : "none"}
+        onLayout={(event) => setTopBarHeight(event.nativeEvent.layout.height)}
+        className="absolute left-0 right-0 top-0 flex-row items-center px-4"
+        style={[{ paddingTop: insets.top + 8, paddingBottom: 8 }, chromeStyle]}
+      >
+        <OverlayIconButton
+          icon={isCropping ? "x" : "arrow-left"}
+          accessibilityLabel={isCropping ? "Discard crop" : "Back"}
+          onPress={() => (isCropping ? discardCropMode() : router.back())}
+        />
+
+        <View className="flex-1 items-center">
+          <OverlayPill>
+            <Text className="text-xs font-semibold" style={{ color: IMMERSIVE.icon }}>
+              {isCropping
+                ? "Crop"
+                : `${activeIndex + 1} of ${photoUris.length}`}
+            </Text>
+          </OverlayPill>
+        </View>
+
+        {/* Balances the back button so the pill stays centred. */}
+        <View style={{ width: 44 }} />
+      </Animated.View>
+
+      {/* Bottom chrome */}
+      <Animated.View
+        pointerEvents={showChrome ? "box-none" : "none"}
+        onLayout={(event) => setBottomBarHeight(event.nativeEvent.layout.height)}
+        className="absolute bottom-0 left-0 right-0"
+        style={chromeStyle}
+      >
+        <View
+          className="mx-3 overflow-hidden rounded-3xl"
+          style={{
+            marginBottom: insets.bottom + 8,
+            backgroundColor: IMMERSIVE.scrim,
+          }}
+        >
+          {isCropping ? (
+            <View className="px-4 pb-4 pt-4">
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 8 }}
+              >
+                {ASPECT_PRESETS.map((preset) => (
+                  <OverlayChip
+                    key={preset.label}
+                    label={preset.label}
+                    active={cropAspect === preset.value}
+                    disabled={mutating}
+                    onPress={() => setCropAspect(preset.value)}
+                  />
+                ))}
+                <OverlayChip
+                  label="Reset"
+                  disabled={mutating || !cropImageFrame}
+                  onPress={() => {
+                    if (!cropImageFrame) return;
+                    setCropRect(fitCropRect(cropImageFrame, cropAspect));
+                  }}
+                />
+              </ScrollView>
+
+              <View className="mt-4 flex-row" style={{ gap: 10 }}>
+                <Pressable
+                  disabled={mutating}
+                  onPress={discardCropMode}
+                  accessibilityLabel="Discard crop"
+                  className="flex-1 items-center rounded-xl py-3"
+                  style={{
+                    borderWidth: 1,
+                    borderColor: IMMERSIVE.controlBorder,
+                    opacity: mutating ? 0.5 : 1,
+                  }}
+                >
+                  <Text className="text-sm font-semibold text-slate-200">
+                    Discard
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  disabled={mutating || !cropRect}
+                  onPress={() => void saveCrop()}
+                  accessibilityLabel="Save crop"
+                  className="flex-1 items-center rounded-xl py-3"
+                  style={{
+                    backgroundColor: IMMERSIVE.active,
+                    opacity: mutating || !cropRect ? 0.5 : 1,
+                  }}
+                >
+                  <Text
+                    className="text-sm font-semibold"
+                    style={{ color: IMMERSIVE.onActive }}
+                  >
+                    Save
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : (
+            <>
+              {photoUris.length > 1 ? (
+                <FlatList
+                  ref={stripRef}
+                  data={photoUris}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  keyExtractor={(item) => item}
+                  className="pt-3"
+                  contentContainerStyle={{ paddingHorizontal: 12, gap: 8 }}
+                  getItemLayout={(_, listIndex) => ({
+                    length: THUMB_SIZE + 8,
+                    offset: (THUMB_SIZE + 8) * listIndex,
+                    index: listIndex,
+                  })}
+                  onScrollToIndexFailed={() => {}}
+                  renderItem={({ item, index: itemIndex }) => {
+                    const selected = itemIndex === activeIndex;
+                    return (
+                      <Pressable
+                        onPress={() => setActiveIndex(itemIndex)}
+                        disabled={mutating}
+                        accessibilityLabel={`Show photo ${itemIndex + 1}`}
+                        accessibilityState={{ selected }}
+                        className="overflow-hidden rounded-xl"
+                        style={{
+                          width: THUMB_SIZE,
+                          height: THUMB_SIZE,
+                          borderWidth: 2,
+                          borderColor: selected
+                            ? IMMERSIVE.active
+                            : "transparent",
+                          opacity: selected ? 1 : 0.55,
+                        }}
+                      >
+                        <Image
+                          source={{ uri: displayUris[item] ?? item }}
+                          style={{ flex: 1 }}
+                          contentFit="cover"
+                        />
+                      </Pressable>
+                    );
+                  }}
+                />
+              ) : null}
+
+              <View className="flex-row items-center px-2 pb-3 pt-3">
+                <ActionButton
+                  icon="crop"
+                  label="Crop"
+                  disabled={mutating}
+                  onPress={() => void beginCropMode()}
+                />
+                <ActionButton
+                  icon="rotate-ccw"
+                  label="Rotate"
+                  disabled={mutating}
+                  onPress={() => void handleRotate()}
+                />
+                <ActionButton
+                  icon="trash-2"
+                  label="Delete"
+                  tone="danger"
+                  disabled={mutating}
+                  onPress={handleDelete}
+                />
+              </View>
+            </>
+          )}
+        </View>
+      </Animated.View>
+
+      {mutating ? (
+        <View
+          pointerEvents="auto"
+          className="absolute inset-0 items-center justify-center"
+          style={{ backgroundColor: "rgba(2,6,23,0.6)" }}
+        >
+          <ActivityIndicator size="large" color={IMMERSIVE.icon} />
+          <Text className="mt-3 text-sm font-medium text-slate-100">
+            Saving…
+          </Text>
+        </View>
+      ) : null}
+    </View>
   );
 }
