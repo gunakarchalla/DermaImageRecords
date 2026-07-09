@@ -498,13 +498,28 @@ export default function PatientDetailsScreen() {
         <Text className="text-lg font-semibold text-slate-900 dark:text-slate-100">
           Consultations
         </Text>
-        <Pressable
-          onPress={() => router.push(`/patient/${patientId}/consultation/add`)}
-          className="bg-slate-900 px-3 py-2 rounded-lg flex-row items-center dark:bg-slate-100"
-        >
-          <Feather name="plus" size={16} color={isDark ? "#0f172a" : "white"} />
-          <Text className="text-white font-semibold ml-1 dark:text-slate-900">Add</Text>
-        </Pressable>
+        <View className="flex-row items-center">
+          <Pressable
+            onPress={() => router.push(`/patient/${patientId}/compare`)}
+            disabled={consultations.length === 0}
+            style={{ opacity: consultations.length === 0 ? 0.4 : 1 }}
+            accessibilityLabel="Compare consultations"
+            className="border border-slate-300 px-3 py-2 rounded-lg flex-row items-center mr-2 dark:border-slate-700"
+          >
+            <Feather name="columns" size={16} color={colors.iconStrong} />
+            <Text className="text-slate-800 font-semibold ml-1 dark:text-slate-200">
+              Compare
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => router.push(`/patient/${patientId}/consultation/add`)}
+            className="bg-slate-900 px-3 py-2 rounded-lg flex-row items-center dark:bg-slate-100"
+          >
+            <Feather name="plus" size={16} color={isDark ? "#0f172a" : "white"} />
+            <Text className="text-white font-semibold ml-1 dark:text-slate-900">Add</Text>
+          </Pressable>
+        </View>
       </View>
     </View>
   );
