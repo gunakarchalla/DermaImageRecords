@@ -55,7 +55,8 @@ const createOrGetCacheFileAsync = async (name: string, mimeType: string) => {
 const guessMimeType = (uri: string): { ext: string; mimeType: string } => {
     const lowered = uri.toLowerCase();
     if (lowered.includes(".png")) return { ext: "png", mimeType: "image/png" };
-    // Default to jpeg since we persist jpeg everywhere in storage.
+    if (lowered.includes(".webp")) return { ext: "webp", mimeType: "image/webp" };
+    // Default to jpeg: the historical format, and still the default image setting.
     return { ext: "jpg", mimeType: "image/jpeg" };
 };
 

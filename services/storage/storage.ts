@@ -1,11 +1,12 @@
-import { File } from "expo-file-system";
-import * as ImageManipulator from "expo-image-manipulator";
+import { File, type Directory } from "expo-file-system";
 
+import { IMAGE_FORMATS, IMAGE_FORMAT_KEYS } from "../../constants/preferences";
 import { STORAGE } from "../../constants/storage";
 import type { Consultation, ConsultationInput, Patient, PatientInput } from "../../types/models";
 import { consultationIndexService } from "../indexing/consultationIndexService";
 import { patientIndexService } from "../indexing/patientIndexService";
 import {
+    findChildFile,
     getOrCreateChildDirectoryAsync,
     readJsonFromDir,
     replaceFileInDirectoryAsync,
@@ -13,6 +14,7 @@ import {
     safeDeleteFile,
     writeJsonToDir,
 } from "./fsUtils";
+import { encodeImageForStorageAsync } from "./imageEncoding";
 import {
     getExistingConsultationDir,
     getExistingPatientDir,
@@ -21,26 +23,37 @@ import {
     initStorageAsync,
 } from "./roots";
 
-const IMAGE_QUALITY = 0.7;
-
 const generateId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-const saveImageToExternalRoot = async (sourceUri: string, destination: File) => {
-    // Compress photos before persisting to reduce storage usage while preserving original dimensions.
-    const result = await ImageManipulator.manipulateAsync(
-        sourceUri,
-        [],
-        { compress: IMAGE_QUALITY, format: ImageManipulator.SaveFormat.JPEG }
-    );
+/**
+ * Encode a photo per the user's image settings, then write it into `dir` as `<baseName>.<ext>`.
+ * The extension follows the chosen format, so it can't be known before encoding.
+ */
+const savePhotoToDirAsync = async (sourceUri: string, dir: Directory, baseName: string) => {
+    const encoded = await encodeImageForStorageAsync(sourceUri);
+    const destination = await replaceFileInDirectoryAsync(dir, `${baseName}.${encoded.ext}`, encoded.mimeType);
 
     // Write bytes into the SAF-created destination file.
     // NOTE: We cannot reliably use File.copy() to SAF/content URIs.
-    const src = new File(result.uri);
+    const src = new File(encoded.uri);
     const bytes = await src.bytes();
     destination.write(bytes);
 
     // No MediaLibrary duplication: this folder is the single source of truth.
-    return { uri: destination.uri };
+    return { uri: destination.uri, fileName: destination.name };
+};
+
+/**
+ * The profile photo has a fixed stem but a format-dependent extension, so switching format
+ * would otherwise strand the previous `profile.<old-ext>` next to the new one.
+ */
+const deleteStaleProfilePhotosAsync = async (dir: Directory, keepFileName: string) => {
+    for (const format of IMAGE_FORMAT_KEYS) {
+        const name = `${STORAGE.profilePhotoBaseName}.${IMAGE_FORMATS[format].ext}`;
+        if (name === keepFileName) continue;
+        const stale = findChildFile(dir, name);
+        if (stale) await safeDeleteFile(stale);
+    }
 };
 
 export const initStorage = async () => {
@@ -99,8 +112,8 @@ export const savePatient = async (patientId: string | null, input: PatientInput)
     if (hasNewProfilePhoto && input.profilePhotoUri) {
     // Overwrite profile photo only when user selected a new image.
     // Reprocessing the previously persisted SAF URI can fail on Android.
-        const dest = await replaceFileInDirectoryAsync(dir, STORAGE.profilePhotoFileName, "image/jpeg");
-        const saved = await saveImageToExternalRoot(input.profilePhotoUri, dest);
+        const saved = await savePhotoToDirAsync(input.profilePhotoUri, dir, STORAGE.profilePhotoBaseName);
+        await deleteStaleProfilePhotosAsync(dir, saved.fileName);
         patient.profilePhotoUri = saved.uri;
     }
 
@@ -180,9 +193,7 @@ export const saveConsultation = async (
             continue;
         }
 
-        const fileName = `${generateId()}.jpg`;
-        const dest = await replaceFileInDirectoryAsync(dir, fileName, "image/jpeg");
-        const saved = await saveImageToExternalRoot(uri, dest);
+        const saved = await savePhotoToDirAsync(uri, dir, generateId());
         preservedUris.push(saved.uri);
     }
 

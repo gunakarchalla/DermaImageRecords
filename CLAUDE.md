@@ -31,7 +31,8 @@ There is **no test runner configured** (no `test` script, no test framework inst
 Data flows through three layers. UI screens should call the **storage** and **indexing** layers, never `dermaDb` directly.
 
 - **`services/storage/`** — filesystem CRUD, the source of truth.
-  - `storage.ts` — `savePatient` / `saveConsultation` / `getPatient` / `deletePatient` etc. Each mutation writes JSON to disk **and** updates the index. Photos are JPEG-compressed (`IMAGE_QUALITY = 0.7`) via `expo-image-manipulator` before writing.
+  - `storage.ts` — `savePatient` / `saveConsultation` / `getPatient` / `deletePatient` etc. Each mutation writes JSON to disk **and** updates the index. Photos are re-encoded through `imageEncoding.ts` before writing.
+  - `imageEncoding.ts` — applies the user's image preference (format / quality / max longest-edge) chosen in the settings screen. **The stored extension is therefore not always `.jpg`** — nothing may assume it, and photos already on disk keep whatever format was configured when they were saved. Only the profile photo has a fixed stem (`STORAGE.profilePhotoBaseName`, not a filename). Native image refs must be `release()`d or batch saves stack full-resolution bitmaps.
   - `roots.ts` — resolves and caches (module-level singletons) the dataset root and `patients/` directory. **Read/list/delete helpers (`getExisting*`) must never create folders**; only the `getOrCreate*` variants create.
   - `drivers/` — platform storage strategy behind `getStorageDriver()`: `androidSafDriver` (prompts via SAF directory picker, persists the chosen `content://` URI to `DermaImageRecords.storage-root.json` in the app sandbox) vs `iosSandboxDriver`.
   - `fsUtils.ts` — defensive filesystem helpers. Everything is wrapped in try/catch because **SAF document providers throw** on list/create/delete when permissions are revoked.

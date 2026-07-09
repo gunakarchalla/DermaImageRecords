@@ -1,6 +1,6 @@
 import { File, Paths } from "expo-file-system";
 
-import { PREFERENCES, type ThemePreference } from "../../constants/preferences";
+import { PREFERENCES, type ImageSettings, type ThemePreference } from "../../constants/preferences";
 
 // Persisted UI preferences live in the app sandbox (Documents), mirroring the
 // storage-root config pattern. This is config, not dataset data, so it stays in
@@ -9,6 +9,7 @@ import { PREFERENCES, type ThemePreference } from "../../constants/preferences";
 export type StoredPreferences = {
     theme: ThemePreference;
     fontStep: number;
+    image: ImageSettings;
 };
 
 const PREFERENCES_FILE = new File(Paths.document, PREFERENCES.fileName);

@@ -7,7 +7,9 @@ export const STORAGE = {
 
     patientFileName: "patient.json",
     consultationFileName: "consultation.json",
-    profilePhotoFileName: "profile.jpg",
+    // Extension is chosen at save time from the user's image format preference
+    // (see constants/preferences.ts), so only the stem is fixed.
+    profilePhotoBaseName: "profile",
 
     // Stored in app sandbox Documents (config, not data) to remember the SAF root URI.
     storageRootConfigFileName: "DermaImageRecords.storage-root.json",

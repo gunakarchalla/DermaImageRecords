@@ -117,9 +117,30 @@ const basename = (pathOrUri: string): string => {
 const mimeForFile = (name: string): string => {
     const lower = name.toLowerCase();
     if (lower.endsWith(".png")) return "image/png";
+    if (lower.endsWith(".webp")) return "image/webp";
     if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
     if (lower.endsWith(".json")) return "application/json";
     return "application/octet-stream";
+};
+
+/**
+ * A patient's profile photo keeps whatever extension the image format setting had when it was
+ * saved, and export writes the folder verbatim — so resolve it by the basename recorded in
+ * patient.json, falling back to any top-level `profile.*` entry in the archive.
+ */
+const resolveProfilePhotoUri = (
+    storedUri: string | undefined,
+    newUriByRelPath: Record<string, string>,
+): string | undefined => {
+    if (storedUri) {
+        const direct = newUriByRelPath[basename(storedUri)];
+        if (direct) return direct;
+    }
+    const prefix = `${STORAGE.profilePhotoBaseName}.`;
+    const relPath = Object.keys(newUriByRelPath).find(
+        (rel) => !rel.includes("/") && rel.toLowerCase().startsWith(prefix),
+    );
+    return relPath ? newUriByRelPath[relPath] : undefined;
 };
 
 /** Stage an in-memory archive as a real file in the cache dir (both share + Drive need a URI). */
@@ -365,7 +386,7 @@ const importSinglePatientAsync = async (
 
     // 2) Point the profile photo at its freshly-written file (if the patient had one).
     patient.id = patientId;
-    patient.profilePhotoUri = newUriByRelPath[STORAGE.profilePhotoFileName];
+    patient.profilePhotoUri = resolveProfilePhotoUri(patient.profilePhotoUri, newUriByRelPath);
 
     // 3) Rewrite each consultation's photoUris to the new files, preserving original order.
     const consultationJsonRelPaths = Object.keys(entries).filter(
