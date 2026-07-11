@@ -14,8 +14,14 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import {
+  DictationButton,
+  DictationStatus,
+} from "../../../../components/DictationButton";
+import { useDictation } from "../../../../hooks/useDictation";
 import { useThemeColors } from "../../../../hooks/useThemeColors";
 import { consumeConsultationCaptureQueue } from "../../../../services/consultationCaptureHandoff";
+import { appendTranscript } from "../../../../services/dictation/correctTranscript";
 import { toRenderableImageUriAsync } from "../../../../services/imageUri";
 import {
   getConsultation,
@@ -37,6 +43,14 @@ export default function AddConsultationScreen() {
   >({});
   const [loading, setLoading] = useState(false);
   const [pickingImage, setPickingImage] = useState(false);
+
+  // Dictated speech is appended, never substituted, so it composes with whatever
+  // the clinician has already typed.
+  const dictation = useDictation({
+    onSegment: useCallback((segment: string) => {
+      setRemarks((previous) => appendTranscript(previous, segment));
+    }, []),
+  });
 
   const loadExisting = useCallback(async () => {
     if (consultationId && patientId) {
@@ -154,6 +168,9 @@ export default function AddConsultationScreen() {
   const handleSave = async () => {
     if (!patientId) return;
 
+    // Anything still being spoken has not landed in `remarks` yet.
+    if (dictation.isListening) dictation.stop();
+
     if (!remarks.trim() && photos.length === 0) {
       Alert.alert("Add details", "Please add remarks or a photo.");
       return;
@@ -193,7 +210,14 @@ export default function AddConsultationScreen() {
         </View>
 
         <View className="mb-4">
-          <Text className="text-sm text-slate-600 mb-2 dark:text-slate-400">Remarks</Text>
+          <View className="flex-row items-center justify-between mb-2">
+            <Text className="text-sm text-slate-600 dark:text-slate-400">Remarks</Text>
+            <DictationButton
+              isListening={dictation.isListening}
+              onPress={dictation.toggle}
+              disabled={loading}
+            />
+          </View>
           <TextInput
             value={remarks}
             onChangeText={setRemarks}
@@ -202,6 +226,11 @@ export default function AddConsultationScreen() {
             className="bg-white rounded-xl border border-slate-200 px-3 py-3 text-base text-slate-900 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-100"
             multiline
             numberOfLines={4}
+          />
+          <DictationStatus
+            isListening={dictation.isListening}
+            interim={dictation.interim}
+            error={dictation.error}
           />
         </View>
 

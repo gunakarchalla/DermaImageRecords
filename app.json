@@ -42,7 +42,17 @@
         }
       ],
       "expo-sqlite",
-      "@react-native-google-signin/google-signin"
+      "@react-native-google-signin/google-signin",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow DermaImageRecords to use the microphone so you can dictate consultation remarks.",
+          "speechRecognitionPermission": "Allow DermaImageRecords to use speech recognition so you can dictate consultation remarks.",
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
