@@ -46,7 +46,7 @@ const loadAllConsultationsAsync = async (patientId: string) => {
     all.push(...page.items);
   }
 
-  // The index already orders by consultation number, which is visit order — newest first.
+  // The index already orders by createdAt — visit order, newest first.
   return all;
 };
 

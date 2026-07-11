@@ -13,17 +13,23 @@ import {
   type BackupMode,
   type BackupPeriodKey,
 } from "../../constants/backup";
+import { ConflictReviewSheet } from "../../components/ConflictReviewSheet";
 import { useThemeColors } from "../../hooks/useThemeColors";
 import { useBackup } from "../../services/backup/BackupProvider";
 import {
+  analyzeArchiveEntriesAsync,
+  applyImportAsync,
+  type ArchivePlanEntry,
   type BackupProgress,
-  type ConflictPolicy,
   describeBackupProgress,
   exportDatasetAsync,
-  importDatasetAsync,
+  ImportCancelledError,
+  type ImportDecision,
   type ImportSummary,
   NoCloudBackupError,
+  pickAndReadArchiveAsync,
 } from "../../services/backup/backupService";
+import type { BackupManifest } from "../../services/backup/manifest";
 
 type FeatherName = ComponentProps<typeof Feather>["name"];
 
@@ -55,34 +61,18 @@ function Section({
   );
 }
 
-/**
- * Ask how to resolve patients that already exist on this device. Resolves null if the user
- * backs out, so the caller can abort. Import and restore both go through this.
- */
-const askConflictPolicyAsync = (title: string, message: string): Promise<ConflictPolicy | null> =>
-  new Promise((resolve) => {
-    Alert.alert(
-      title,
-      message,
-      [
-        { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
-        { text: "Keep mine", onPress: () => resolve("skip") },
-        { text: "Replace mine", style: "destructive", onPress: () => resolve("replace") },
-      ],
-      { onDismiss: () => resolve(null) },
-    );
-  });
-
 const summaryLines = (summary: ImportSummary): string[] => {
   const lines: string[] = [];
-  if (summary.imported > 0 || summary.replaced === 0) {
-    lines.push(`Added ${summary.imported} patient${summary.imported === 1 ? "" : "s"}.`);
+  if (summary.imported > 0) {
+    lines.push(`Added ${summary.imported} new patient${summary.imported === 1 ? "" : "s"}.`);
   }
-  if (summary.replaced > 0) {
-    lines.push(`Replaced ${summary.replaced} existing.`);
+  if (summary.merged > 0) {
+    lines.push(`Merged ${summary.merged} existing patient${summary.merged === 1 ? "" : "s"}.`);
   }
-  if (summary.skipped > 0) {
-    lines.push(`Kept ${summary.skipped} already present.`);
+  if (summary.addedAsNew > 0) {
+    lines.push(
+      `Added ${summary.addedAsNew} under a new EMR${summary.addedAsNew === 1 ? "" : "s"}.`,
+    );
   }
   if (summary.duplicateInArchive > 0) {
     lines.push(
@@ -94,7 +84,23 @@ const summaryLines = (summary: ImportSummary): string[] => {
   if (summary.invalid > 0) {
     lines.push(`${summary.invalid} could not be read.`);
   }
+  if (lines.length === 0) {
+    lines.push("Everything was already up to date.");
+  }
   return lines;
+};
+
+/** A "Restored from …" line from the archive's manifest / Drive timestamp, or null if unknown. */
+const restoredFromLine = (
+  manifest: BackupManifest | null,
+  modifiedTime: string | null,
+): string | null => {
+  const iso = modifiedTime ?? manifest?.exportedAt ?? null;
+  const when = iso ? new Date(iso).toLocaleDateString() : null;
+  const who = manifest?.account.email ?? null;
+  if (who && when) return `From ${who}'s backup (${when}).`;
+  if (when) return `From the backup of ${when}.`;
+  return null;
 };
 
 const MODE_OPTIONS: { value: BackupMode; label: string }[] = [
@@ -236,9 +242,31 @@ export default function ImportExportScreen() {
   const isDark = colorScheme === "dark";
   const [busy, setBusy] = useState<null | "export" | "import">(null);
   const [progress, setProgress] = useState<BackupProgress | null>(null);
+  // When set, the name-mismatch review sheet is open; `resolve` feeds the user's choice back to
+  // the awaiting import/restore. See ConflictReviewSheet.
+  const [review, setReview] = useState<{
+    mismatches: ArchivePlanEntry[];
+    resolve: (decisions: Record<string, ImportDecision> | null) => void;
+  } | null>(null);
 
   const cloud = useBackup();
   const anyBusy = busy !== null || cloud.busy;
+
+  // Show the review sheet and resolve once the user applies or cancels. Passed to restore as the
+  // DecisionResolver, and called directly by import when the archive has mismatches.
+  const showReviewAsync = useCallback(
+    (mismatches: ArchivePlanEntry[]): Promise<Record<string, ImportDecision> | null> =>
+      new Promise((resolve) => setReview({ mismatches, resolve })),
+    [],
+  );
+
+  const finishReview = useCallback(
+    (decisions: Record<string, ImportDecision> | null) => {
+      review?.resolve(decisions);
+      setReview(null);
+    },
+    [review],
+  );
   // A pending retry outlives a switch away from automatic mode (so re-enabling resumes the
   // backoff), but only automatic mode actually runs it — don't promise a retry otherwise.
   const retryNotice =
@@ -267,44 +295,55 @@ export default function ImportExportScreen() {
   }, []);
 
   const onImport = useCallback(async () => {
-    const policy = await askConflictPolicyAsync(
-      "Import records",
-      "Pick a .zip exported from this app. New patients are always added — choose what happens when a patient in the file has the same EMR number as one on this device.",
-    );
-    if (!policy) return;
-
     setBusy("import");
     setProgress(null);
     try {
-      const result = await importDatasetAsync(policy, setProgress);
-      if (result.cancelled) return;
-      Alert.alert("Import complete", summaryLines(result).join("\n"));
+      const entries = await pickAndReadArchiveAsync(setProgress);
+      if (!entries) return; // user cancelled the file picker
+
+      const analysis = await analyzeArchiveEntriesAsync(entries);
+      if (analysis.plan.length === 0) {
+        Alert.alert("Nothing to import", "No patient records were found in this file.");
+        return;
+      }
+
+      const mismatches = analysis.plan.filter((p) => p.nameMismatch);
+      const decisions = mismatches.length > 0 ? await showReviewAsync(mismatches) : {};
+      if (decisions === null) return; // user cancelled the review
+
+      const result = await applyImportAsync(entries, analysis, decisions, setProgress);
+      Alert.alert(
+        "Import complete",
+        [restoredFromLine(analysis.manifest, null), ...summaryLines(result)]
+          .filter(Boolean)
+          .join("\n"),
+      );
     } catch (error) {
       Alert.alert("Import failed", (error as Error).message);
     } finally {
       setBusy(null);
       setProgress(null);
     }
-  }, []);
+  }, [showReviewAsync]);
 
   const onRestore = useCallback(async () => {
-    const policy = await askConflictPolicyAsync(
-      "Restore from Google Drive",
-      "Your latest Drive backup will be downloaded and its patients added to this device. Choose what happens when a patient in the backup has the same EMR number as one already here.",
-    );
-    if (!policy) return;
-
     try {
-      const result = await cloud.restoreFromCloud(policy);
-      Alert.alert("Restore complete", summaryLines(result).join("\n"));
+      const result = await cloud.restoreFromCloud(showReviewAsync);
+      Alert.alert(
+        "Restore complete",
+        [restoredFromLine(result.manifest, result.modifiedTime), ...summaryLines(result)]
+          .filter(Boolean)
+          .join("\n"),
+      );
     } catch (error) {
+      if (error instanceof ImportCancelledError) return; // user backed out of the review
       if (error instanceof NoCloudBackupError) {
         Alert.alert("No backup found", "This Google account has no DermaImageRecords backup yet.");
         return;
       }
       Alert.alert("Restore failed", (error as Error).message);
     }
-  }, [cloud]);
+  }, [cloud, showReviewAsync]);
 
   return (
     <SafeAreaView edges={["bottom", "left", "right"]} className="flex-1 bg-slate-50 dark:bg-slate-950">
@@ -455,7 +494,7 @@ export default function ImportExportScreen() {
         </View>
       </ScrollView>
 
-      {anyBusy ? (
+      {anyBusy && !review ? (
         <View className="absolute inset-0 items-center justify-center bg-black/40">
           <View className="min-w-[220px] items-center rounded-2xl bg-white px-8 py-6 dark:bg-slate-900">
             <ActivityIndicator size="large" color={colors.accent} />
@@ -464,6 +503,10 @@ export default function ImportExportScreen() {
             </Text>
           </View>
         </View>
+      ) : null}
+
+      {review ? (
+        <ConflictReviewSheet mismatches={review.mismatches} onResolve={finishReview} />
       ) : null}
     </SafeAreaView>
   );

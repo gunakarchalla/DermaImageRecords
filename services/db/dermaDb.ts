@@ -16,8 +16,11 @@ const DB_NAME = "derma-index.db";
  * separate `emrNumber` / `emrNumberSort` columns were dropped.
  * v3: consultations gained a per-patient sequence `number`, which orders the list and drives
  * pagination; patients gained `lastConsultationNumber`.
+ * v4: consultation identity moved to a `createdAt`-derived timestamp id; the stored `number`
+ * column and `patients.lastConsultationNumber` were dropped. The visit number is now a derived
+ * ordinal over `createdAt`, and consultations order/paginate by `createdAt`.
  */
-const DB_SCHEMA_VERSION = 3;
+const DB_SCHEMA_VERSION = 4;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 let schemaReadyPromise: Promise<void> | null = null;
@@ -70,7 +73,6 @@ const ensureSchemaAsync = async () => {
                 gender TEXT,
                 phone TEXT,
                 profilePhotoUri TEXT,
-                lastConsultationNumber INTEGER NOT NULL DEFAULT 0,
                 createdAt TEXT NOT NULL,
                 updatedAt TEXT NOT NULL
             );
@@ -79,11 +81,11 @@ const ensureSchemaAsync = async () => {
             CREATE INDEX IF NOT EXISTS idx_patients_createdAt ON patients(createdAt);
             CREATE INDEX IF NOT EXISTS idx_patients_nameSort ON patients(nameSort);
 
-            -- \`id\` is the zero-padded spelling of \`number\`, and the consultation's folder
-            -- name. Ordering and pagination use the integer \`number\`, never the padded text.
+            -- \`id\` is the consultation's \`createdAt\`-derived timestamp and its folder name.
+            -- Ordering and pagination use \`createdAt\`; the visit number shown in the UI is a
+            -- derived ordinal computed at query time, not a stored column.
             CREATE TABLE IF NOT EXISTS consultations (
                 id TEXT NOT NULL,
-                number INTEGER NOT NULL,
                 patientId TEXT NOT NULL,
                 remarks TEXT NOT NULL,
                 photoCount INTEGER NOT NULL,
@@ -92,7 +94,7 @@ const ensureSchemaAsync = async () => {
                 PRIMARY KEY (patientId, id)
             );
 
-            CREATE INDEX IF NOT EXISTS idx_consultations_patient_number ON consultations(patientId, number);
+            CREATE INDEX IF NOT EXISTS idx_consultations_patient_createdAt ON consultations(patientId, createdAt);
         `
         );
 
@@ -115,10 +117,11 @@ export type PatientCursor = {
     id: string;
 };
 
-/** Keyset cursor for a patient's consultations. `number` is unique per patient, so it alone
- *  gives a stable total order — no tiebreak column is needed. */
+/** Keyset cursor for a patient's consultations. `createdAt` orders the list; `id` (also derived
+ *  from `createdAt`) is the tiebreak for the rare same-instant pair. */
 export type ConsultationCursor = {
-    number: number;
+    createdAt: string;
+    id: string;
 };
 
 export const dermaDb = {
@@ -172,8 +175,8 @@ export const dermaDb = {
             await txn.runAsync(
                 `
                 INSERT INTO patients(
-                    id, name, nameSort, age, gender, phone, profilePhotoUri, lastConsultationNumber, createdAt, updatedAt
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, name, nameSort, age, gender, phone, profilePhotoUri, createdAt, updatedAt
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     nameSort = excluded.nameSort,
@@ -181,7 +184,6 @@ export const dermaDb = {
                     gender = excluded.gender,
                     phone = excluded.phone,
                     profilePhotoUri = excluded.profilePhotoUri,
-                    lastConsultationNumber = excluded.lastConsultationNumber,
                     createdAt = excluded.createdAt,
                     updatedAt = excluded.updatedAt
             `,
@@ -193,7 +195,6 @@ export const dermaDb = {
                     patient.gender ?? null,
                     patient.phone ?? null,
                     patient.profilePhotoUri ?? null,
-                    patient.lastConsultationNumber,
                     patient.createdAt,
                     patient.updatedAt,
                 ]
@@ -263,13 +264,12 @@ export const dermaDb = {
             gender: string | null;
             phone: string | null;
             profilePhotoUri: string | null;
-            lastConsultationNumber: number;
             createdAt: string;
             updatedAt: string;
             nameSort: string;
         }>(
             `
-            SELECT id, name, age, gender, phone, profilePhotoUri, lastConsultationNumber, createdAt, updatedAt, nameSort
+            SELECT id, name, age, gender, phone, profilePhotoUri, createdAt, updatedAt, nameSort
             FROM patients
             ${whereSql}
             ORDER BY ${sortExpr} ${direction}, id ${direction}
@@ -286,7 +286,6 @@ export const dermaDb = {
             gender: (r.gender as Patient["gender"]) ?? undefined,
             phone: r.phone ?? undefined,
             profilePhotoUri: r.profilePhotoUri ?? undefined,
-            lastConsultationNumber: r.lastConsultationNumber,
             createdAt: r.createdAt,
             updatedAt: r.updatedAt,
         }));
@@ -309,10 +308,9 @@ export const dermaDb = {
         await db.withExclusiveTransactionAsync(async (txn) => {
             await txn.runAsync(
                 `
-                INSERT INTO consultations(id, number, patientId, remarks, photoCount, createdAt, updatedAt)
-                VALUES(?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO consultations(id, patientId, remarks, photoCount, createdAt, updatedAt)
+                VALUES(?, ?, ?, ?, ?, ?)
                 ON CONFLICT(patientId, id) DO UPDATE SET
-                    number = excluded.number,
                     remarks = excluded.remarks,
                     photoCount = excluded.photoCount,
                     createdAt = excluded.createdAt,
@@ -320,7 +318,6 @@ export const dermaDb = {
             `,
                 [
                     consultation.id,
-                    consultation.number,
                     consultation.patientId,
                     consultation.remarks,
                     consultation.photoUris.length,
@@ -355,12 +352,15 @@ export const dermaDb = {
         await ensureSchemaAsync();
         const db = await openDbAsync();
 
-        const where: string[] = ["patientId = ?"];
+        // The display number is the row's position over `createdAt ASC` across the patient's whole
+        // set, so it must be computed *before* the cursor filter narrows the page — hence the
+        // window function in an inner query, with pagination applied on the outside. Pages come
+        // back newest-first (createdAt DESC), keyset-paginated on (createdAt, id).
         const args: (string | number)[] = [input.patientId];
-
+        let cursorSql = "";
         if (input.cursor) {
-            where.push("number < ?");
-            args.push(input.cursor.number);
+            cursorSql = "WHERE (createdAt < ? OR (createdAt = ? AND id < ?))";
+            args.push(input.cursor.createdAt, input.cursor.createdAt, input.cursor.id);
         }
 
         const rows = await db.getAllAsync<{
@@ -374,9 +374,14 @@ export const dermaDb = {
         }>(
             `
             SELECT id, number, patientId, remarks, photoCount, createdAt, updatedAt
-            FROM consultations
-            WHERE ${where.join(" AND ")}
-            ORDER BY number DESC
+            FROM (
+                SELECT id, patientId, remarks, photoCount, createdAt, updatedAt,
+                       ROW_NUMBER() OVER (ORDER BY createdAt ASC, id ASC) AS number
+                FROM consultations
+                WHERE patientId = ?
+            )
+            ${cursorSql}
+            ORDER BY createdAt DESC, id DESC
             LIMIT ?
         `,
             [...args, input.limit]
@@ -393,8 +398,33 @@ export const dermaDb = {
         }));
 
         const last = rows.at(-1);
-        const nextCursor = last && items.length === input.limit ? { number: last.number } : undefined;
+        const nextCursor =
+            last && items.length === input.limit
+                ? { createdAt: last.createdAt, id: last.id }
+                : undefined;
 
         return { items, nextCursor };
+    },
+
+    /**
+     * The derived display number for a single consultation (its position over `createdAt ASC`
+     * among the patient's visits), or null if the row is not indexed. Used by the detail screen,
+     * which loads the consultation file (no stored number) and needs the ordinal for its heading.
+     */
+    getConsultationNumberAsync: async (patientId: string, id: string): Promise<number | null> => {
+        await ensureSchemaAsync();
+        const db = await openDbAsync();
+        const row = await db.getFirstAsync<{ number: number }>(
+            `
+            SELECT number FROM (
+                SELECT id, ROW_NUMBER() OVER (ORDER BY createdAt ASC, id ASC) AS number
+                FROM consultations
+                WHERE patientId = ?
+            )
+            WHERE id = ?
+        `,
+            [patientId, id]
+        );
+        return row?.number ?? null;
     },
 };

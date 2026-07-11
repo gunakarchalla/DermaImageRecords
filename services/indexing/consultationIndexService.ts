@@ -3,7 +3,6 @@ import { Directory } from "expo-file-system";
 import { consultationsPatientLastReindexAtKey } from "../../constants/indexing";
 import { STORAGE } from "../../constants/storage";
 import type { Consultation, ConsultationIndexRow } from "../../types/models";
-import { parseConsultationNumber } from "../consultation/consultationNumber";
 import { dermaDb, type ConsultationCursor } from "../db/dermaDb";
 import { listEntriesSafe, readJsonFromDir } from "../storage/fsUtils";
 import { getExistingConsultationDir, getExistingConsultationsRootDirForPatientAsync } from "../storage/roots";
@@ -37,15 +36,12 @@ export const consultationIndexService = {
             if (consultationsRoot?.exists) {
                 const entries = listEntriesSafe(consultationsRoot).filter((e) => e instanceof Directory) as Directory[];
                 for (const dir of entries) {
-                    // The folder name *is* the consultation number, so it wins over anything the
-                    // JSON claims. A folder not named by a number cannot be a consultation.
-                    const number = parseConsultationNumber(dir.name);
-                    if (number === null) continue;
-
+                    // A consultation folder is one that holds a consultation.json; the folder name
+                    // is the id. The display number is derived at query time, not stored here.
                     const consultation = await readJsonFromDir<Consultation>(dir, STORAGE.consultationFileName);
                     if (!consultation) continue;
 
-                    await dermaDb.upsertConsultationAsync({ ...consultation, id: dir.name, number, patientId });
+                    await dermaDb.upsertConsultationAsync({ ...consultation, id: dir.name, patientId });
                 }
             }
 
@@ -68,6 +64,15 @@ export const consultationIndexService = {
     deleteConsultationAsync: async (patientId: string, consultationId: string) => {
         await consultationIndexService.ensureConsultationsIndexForPatientAsync(patientId);
         await dermaDb.deleteConsultationAsync(patientId, consultationId);
+    },
+
+    /** The derived display number (position over `createdAt`) for one consultation, or null. */
+    getConsultationNumberAsync: async (
+        patientId: string,
+        consultationId: string,
+    ): Promise<number | null> => {
+        await consultationIndexService.ensureConsultationsIndexForPatientAsync(patientId);
+        return dermaDb.getConsultationNumberAsync(patientId, consultationId);
     },
 
     deleteConsultationsByPatientAsync: async (patientId: string) => {

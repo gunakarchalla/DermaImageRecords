@@ -9,12 +9,7 @@ import type {
     PatientCreateInput,
     PatientUpdateInput,
 } from "../../types/models";
-import {
-    coerceConsultationNumber,
-    formatConsultationNumber,
-    highestConsultationNumberOnDisk,
-    parseConsultationNumber,
-} from "../consultation/consultationNumber";
+import { folderStampFromCreatedAt } from "../consultation/consultationNumber";
 import { consultationIndexService } from "../indexing/consultationIndexService";
 import { patientIndexService } from "../indexing/patientIndexService";
 import { EmrNumberTakenError, requireValidEmrNumber } from "../patient/emr";
@@ -30,7 +25,6 @@ import {
 import { encodeImageForStorageAsync } from "./imageEncoding";
 import {
     getExistingConsultationDir,
-    getExistingConsultationsRootDir,
     getExistingPatientDir,
     getOrCreateConsultationsRootDirAsync,
     getOrCreatePatientDirAsync,
@@ -139,7 +133,6 @@ export const createPatientAsync = async (input: PatientCreateInput): Promise<Pat
         gender: input.gender,
         phone: input.phone?.trim() || undefined,
         profilePhotoUri: undefined,
-        lastConsultationNumber: 0,
         createdAt: now,
         updatedAt: now,
     };
@@ -175,8 +168,6 @@ export const updatePatientAsync = async (patientId: string, input: PatientUpdate
         gender: input.gender,
         phone: input.phone?.trim() || undefined,
         profilePhotoUri: existing?.profilePhotoUri,
-        // Carried through untouched: editing details must never rewind the consultation counter.
-        lastConsultationNumber: coerceConsultationNumber(existing?.lastConsultationNumber),
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
     };
@@ -207,12 +198,6 @@ export const deleteConsultation = async (patientId: string, consultationId: stri
 
     const patientDir = getExistingPatientDir(patientId);
 
-    // Read the highest number still on disk *before* removing the folder. Deleting the newest
-    // consultation must not lower the counter, or the next one would reuse a number that has
-    // already been issued — see services/consultation/consultationNumber.ts.
-    const consultationsDir = patientDir ? getExistingConsultationsRootDir(patientDir) : null;
-    const highestIssued = highestConsultationNumberOnDisk(consultationsDir);
-
     const dir = getExistingConsultationDir(patientId, consultationId);
     if (dir) {
         // Best-effort validation read (source-of-truth is directory presence).
@@ -224,29 +209,31 @@ export const deleteConsultation = async (patientId: string, consultationId: stri
     await consultationIndexService.deleteConsultationAsync(patientId, consultationId);
 
     // Deleting a consultation is a patient record mutation; keep patient metadata/index in sync.
+    // The visit number is derived from `createdAt` order, so the remaining visits simply re-label
+    // themselves — there is no counter to maintain.
     const patient = patientDir ? await readJsonFromDir<Patient>(patientDir, STORAGE.patientFileName) : null;
     if (patient && patientDir) {
         patient.updatedAt = new Date().toISOString();
-        patient.lastConsultationNumber = Math.max(
-            coerceConsultationNumber(patient.lastConsultationNumber),
-            highestIssued,
-        );
         await writeJsonToDir(patientDir, STORAGE.patientFileName, patient);
         await patientIndexService.upsertPatientAsync(patient);
     }
 };
 
 /**
- * The next consultation number for a patient. Numbers are never reused, so this is one past the
- * highest ever *issued* — the persisted counter — rather than one past the highest that still
- * exists. Taking the maximum with the folders on disk keeps the sequence sound even when the
- * counter is behind (a hand-edited or older `patient.json`, or a restored archive).
+ * Allocate a fresh id + `createdAt` for a new consultation. The id is the `createdAt`-derived
+ * timestamp stamp (see services/consultation/consultationNumber.ts). Creation is sequential, so a
+ * collision is only possible in the same millisecond — bump by 1 ms until the folder name is free,
+ * preserving the `id === folderStampFromCreatedAt(createdAt)` invariant and keeping folders unique.
  */
-const nextConsultationNumber = (patient: Patient | null, consultationsDir: Directory): number =>
-    Math.max(
-        coerceConsultationNumber(patient?.lastConsultationNumber),
-        highestConsultationNumberOnDisk(consultationsDir),
-    ) + 1;
+const allocateConsultationStamp = (patientId: string): { id: string; createdAt: string } => {
+    let ms = Date.now();
+    for (;;) {
+        const createdAt = new Date(ms).toISOString();
+        const id = folderStampFromCreatedAt(createdAt);
+        if (!getExistingConsultationDir(patientId, id)) return { id, createdAt };
+        ms += 1;
+    }
+};
 
 export const saveConsultation = async (
     patientId: string,
@@ -263,24 +250,25 @@ export const saveConsultation = async (
     const patient = await readJsonFromDir<Patient>(patientDirectory, STORAGE.patientFileName);
     const consultationsDir = await getOrCreateConsultationsRootDirAsync(patientDirectory);
 
-    // Creating allocates the next number; editing keeps the one the folder already carries.
+    // Creating mints a fresh timestamp id; editing keeps the folder the id already names.
     // The folder name is the identity, so an edit must never conjure a new folder.
     let dir: Directory;
-    let number: number;
+    let id: string;
+    let createdAtForNew: string;
 
     if (consultationId === null) {
-        number = nextConsultationNumber(patient, consultationsDir);
-        dir = await getOrCreateChildDirectoryAsync(consultationsDir, formatConsultationNumber(number));
+        const allocated = allocateConsultationStamp(patientId);
+        id = allocated.id;
+        createdAtForNew = allocated.createdAt;
+        dir = await getOrCreateChildDirectoryAsync(consultationsDir, id);
     } else {
         const found = getExistingConsultationDir(patientId, consultationId);
         if (!found) throw new Error("That consultation no longer exists on this device.");
         dir = found;
-        const parsed = parseConsultationNumber(consultationId);
-        if (parsed === null) throw new Error("That consultation has an unrecognised number.");
-        number = parsed;
+        id = consultationId;
+        createdAtForNew = new Date().toISOString(); // fallback only, if the file is somehow missing
     }
 
-    const id = formatConsultationNumber(number);
     const now = new Date().toISOString();
     const existing = (await readJsonFromDir<Consultation>(dir, STORAGE.consultationFileName)) ?? null;
 
@@ -314,24 +302,19 @@ export const saveConsultation = async (
 
     const consultation: Consultation = {
         id,
-        number,
         patientId,
         remarks: input.remarks.trim(),
         photoUris: preservedUris,
-        createdAt: existing?.createdAt ?? now,
+        createdAt: existing?.createdAt ?? createdAtForNew,
         updatedAt: now,
     };
 
     await writeJsonToDir(dir, STORAGE.consultationFileName, consultation);
 
-    // Keep patient metadata in sync for sorting by last modified, and record the number as
-    // issued so it can never be handed to another consultation — even after this one is deleted.
+    // Keep patient metadata in sync for sorting by last modified. The visit number is derived from
+    // `createdAt` order, so there is no counter to advance here.
     if (patient) {
         patient.updatedAt = now;
-        patient.lastConsultationNumber = Math.max(
-            coerceConsultationNumber(patient.lastConsultationNumber),
-            number,
-        );
         await writeJsonToDir(patientDirectory, STORAGE.patientFileName, patient);
         await patientIndexService.upsertPatientAsync(patient);
     }

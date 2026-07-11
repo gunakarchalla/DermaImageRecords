@@ -39,9 +39,9 @@ export function CloudRestoreGate() {
   const runRestore = useCallback(async () => {
     setRestoring(true);
     try {
-      // The dataset is empty, so no incoming patient can collide — the policy is moot here.
-      // The Import & export screen is where the user chooses skip vs replace.
-      const result: RestoreResult = await restoreFromCloud("skip");
+      // The dataset is empty, so no incoming patient can collide — every record is simply added.
+      // (Name-mismatch review only applies when this device already holds records.)
+      const result: RestoreResult = await restoreFromCloud();
       const backedUpOn = result.modifiedTime
         ? ` from the backup of ${new Date(result.modifiedTime).toLocaleDateString()}`
         : "";

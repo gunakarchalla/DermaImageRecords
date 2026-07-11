@@ -43,6 +43,10 @@ export class DriveAccessError extends Error {
     }
 }
 
+/** The signed-in Google account's email, for backup provenance. Null when not signed in. */
+export const getCurrentAccountEmail = (): string | null =>
+    GoogleSignin.getCurrentUser()?.user?.email ?? null;
+
 /**
  * HTTP statuses worth retrying unattended: rate limits, timeouts, server-side faults, and
  * 401 (each backup fetches a fresh access token, so an expired one self-heals). A 403

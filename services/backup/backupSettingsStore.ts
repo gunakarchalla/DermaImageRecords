@@ -30,6 +30,12 @@ export type StoredBackupSettings = {
     retryAttempt: number;
     /** Epoch ms at which the pending retry is due, or null when none is scheduled. */
     nextRetryAt: number | null;
+    /**
+     * Stable per-install id, minted once and written into every backup manifest. Lets a restore
+     * tell "this device's own backup" from "another device / a colleague's export". Null until
+     * the first backup mints it (see `getOrCreateOriginIdAsync`).
+     */
+    originId: string | null;
 };
 
 export const DEFAULT_BACKUP_SETTINGS: StoredBackupSettings = {
@@ -40,6 +46,7 @@ export const DEFAULT_BACKUP_SETTINGS: StoredBackupSettings = {
     driveFileId: null,
     retryAttempt: 0,
     nextRetryAt: null,
+    originId: null,
 };
 
 const BACKUP_FILE = new File(Paths.document, BACKUP.fileName);
@@ -72,6 +79,7 @@ export const readBackupSettingsAsync = async (): Promise<StoredBackupSettings> =
                     ? Math.min(Math.floor(parsed.retryAttempt), BACKUP.maxRetryAttempts)
                     : 0,
             nextRetryAt: typeof parsed.nextRetryAt === "number" ? parsed.nextRetryAt : null,
+            originId: typeof parsed.originId === "string" ? parsed.originId : null,
         };
     } catch {
         // Corrupt/unreadable config should never crash the app; fall back to defaults.
@@ -88,4 +96,17 @@ export const writeBackupSettingsAsync = async (
     } catch {
         // Best-effort persistence; a failed write just means settings reset next launch.
     }
+};
+
+/**
+ * The stable per-install origin id, minting and persisting one on first use. Read when building a
+ * backup manifest so a later restore can recognise this device's own backups.
+ */
+export const getOrCreateOriginIdAsync = async (): Promise<string> => {
+    const settings = await readBackupSettingsAsync();
+    if (settings.originId) return settings.originId;
+
+    const originId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    await writeBackupSettingsAsync({ ...settings, originId });
+    return originId;
 };

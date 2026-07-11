@@ -19,26 +19,21 @@ export type Patient = {
     gender?: Gender;
     phone?: string;
     profilePhotoUri?: string;
-    /**
-     * The highest consultation number ever issued to this patient — not the count of
-     * consultations that currently exist. Deleting a visit never decrements it, which is what
-     * makes a consultation number a permanent identifier. See services/consultation/consultationNumber.ts.
-     */
-    lastConsultationNumber: number;
     createdAt: string;
     updatedAt: string;
 };
 
 /**
- * INVARIANT: `id === formatConsultationNumber(number)`, and `id` is the consultation's folder
- * name inside `<patient>/consultations/`. `number` is the patient-scoped sequence (1, 2, 3…);
- * `id` is its zero-padded spelling, used as the folder name and the route param.
+ * INVARIANT: `id === folderStampFromCreatedAt(createdAt)`, and `id` is the consultation's folder
+ * name inside `<patient>/consultations/`. The id is a stable, timezone-independent timestamp
+ * derived from the immutable `createdAt` — it is the cross-device identity that makes merging a
+ * folder union (see services/consultation/consultationNumber.ts).
  *
- * The number is assigned by `saveConsultation` and never entered by the user.
+ * There is no stored visit number: the 1, 2, 3… a clinician sees is a derived ordinal over
+ * `createdAt`, produced by the index query (see ConsultationIndexRow.number).
  */
 export type Consultation = {
     id: string;
-    number: number;
     patientId: string;
     remarks: string;
     photoUris: string[];
@@ -47,7 +42,9 @@ export type Consultation = {
 };
 
 // SQLite index-backed list row.
-// NOTE: The index stores only `photoCount` (not full photo URIs) to keep the DB small and rebuildable.
+// NOTE: The index stores only `photoCount` (not full photo URIs) to keep the DB small and
+// rebuildable. `number` is the derived display ordinal (position over `createdAt`), computed by
+// the query — it is not a stored column.
 export type ConsultationIndexRow = {
     id: string;
     number: number;

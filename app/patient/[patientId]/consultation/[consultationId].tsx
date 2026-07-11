@@ -13,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useThemeColors } from "../../../../hooks/useThemeColors";
 import { toRenderableImageUriAsync } from "../../../../services/imageUri";
+import { consultationIndexService } from "../../../../services/indexing/consultationIndexService";
 import { getConsultation } from "../../../../services/storage/storage";
 import { Consultation } from "../../../../types/models";
 
@@ -25,6 +26,8 @@ export default function ViewConsultationScreen() {
   }>();
 
   const [consultation, setConsultation] = useState<Consultation | null>(null);
+  // Derived display ordinal (position over createdAt); the stored consultation has no number.
+  const [number, setNumber] = useState<number | null>(null);
   const [photoDisplayUris, setPhotoDisplayUris] = useState<
     Record<string, string | undefined>
   >({});
@@ -35,6 +38,7 @@ export default function ViewConsultationScreen() {
     setLoading(true);
     const data = await getConsultation(patientId, consultationId);
     setConsultation(data);
+    setNumber(await consultationIndexService.getConsultationNumberAsync(patientId, consultationId));
 
     // Resolve persisted SAF/content URIs to cache file:// URIs for rendering.
     if (data?.photoUris?.length) {
@@ -88,7 +92,7 @@ export default function ViewConsultationScreen() {
       >
         <View className="flex-row items-center justify-between mb-3">
           <Text className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-            Consultation #{consultation.number}
+            {number ? `Consultation #${number}` : "Consultation"}
           </Text>
           <Pressable
             onPress={() =>

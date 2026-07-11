@@ -1,7 +1,7 @@
 import * as DocumentPicker from "expo-document-picker";
 import { Directory, File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
-import { strFromU8, unzipSync, Zip, ZipPassThrough } from "fflate";
+import { strFromU8, strToU8, unzipSync, Zip, ZipPassThrough } from "fflate";
 
 import { BACKUP } from "../../constants/backup";
 import { STORAGE } from "../../constants/storage";
@@ -11,27 +11,37 @@ import {
     DriveAccessError,
     ensureDriveAccessTokenAsync,
     findLatestBackupAsync,
+    getCurrentAccountEmail,
     uploadLatestBackupAsync,
 } from "./googleDrive";
+import { getOrCreateOriginIdAsync } from "./backupSettingsStore";
 import {
-    coerceConsultationNumber,
-    formatConsultationNumber,
-    parseConsultationNumber,
-} from "../consultation/consultationNumber";
+    buildManifest,
+    MANIFEST_FILE_NAME,
+    parseManifest,
+    type BackupManifest,
+} from "./manifest";
+import { folderStampFromCreatedAt } from "../consultation/consultationNumber";
 import { bumpDatasetRevision } from "../datasetRevision";
 import { clearImageCacheAsync } from "../imageUri";
 import { consultationIndexService } from "../indexing/consultationIndexService";
 import { patientIndexService } from "../indexing/patientIndexService";
-import { canonicalizeEmrNumber, validateEmrNumber } from "../patient/emr";
+import {
+    canonicalizeEmrNumber,
+    generateEmrNumberAsync,
+    validateEmrNumber,
+} from "../patient/emr";
 import {
     getOrCreateChildDirectoryAsync,
     listEntriesSafe,
+    readJsonFromDir,
     replaceFileInDirectoryAsync,
     safeDeleteDir,
     writeJsonToDir,
 } from "../storage/fsUtils";
 import {
     getDatasetRootDirectoryAsync,
+    getExistingConsultationDir,
     getExistingPatientDir,
     getPatientsRootDirectoryAsync,
     initStorageAsync,
@@ -45,17 +55,18 @@ import {
  * rebuilt from disk after an import.
  *
  * Export streams the dataset tree into an in-memory zip (STORE, since JPEGs are already
- * compressed) and hands it to the OS share sheet. Import unzips a chosen file and merges its
- * patient folders into the existing dataset; restore does the same with the archive pulled
- * from the user's Google Drive. Both rewrite the stored image URIs to their new on-device
- * locations and rebuild the index, and both resolve collisions with a caller-chosen
- * `ConflictPolicy`.
+ * compressed), adds a root `backup.json` manifest, and hands it to the OS share sheet. Import
+ * unzips a chosen file and **merges** its patient folders into the existing dataset; restore does
+ * the same with the archive pulled from the user's Google Drive. Both rewrite the stored image
+ * URIs to their new on-device locations and rebuild the index.
  *
- * Identity on import is the **EMR number, and nothing else**. It is read out of each
- * `patient.json` rather than taken from the archive's folder names, so a record keeps its
- * identity even if the zip was produced before the EMR became the folder name, or was
- * rearranged by hand. An archived record with no usable EMR cannot be placed, and is counted
- * as `invalid`.
+ * Import always merges — it never deletes local data. Identity on import is the **EMR number, and
+ * nothing else**, read out of each `patient.json`. A same-EMR record is folded into the existing
+ * patient (demographics resolved newest-wins; consultations unioned by their `createdAt`-derived
+ * id, newest-wins on a tie). The one exception is surfaced to the user: when a same-EMR record's
+ * name clearly differs, the caller may choose to give the incoming record a fresh EMR and add it
+ * separately (`addAsNew`) instead of merging. An archived record with no usable EMR cannot be
+ * placed, and is counted as `invalid`.
  */
 
 export type BackupPhase =
@@ -75,27 +86,52 @@ export type BackupProgress = {
 };
 
 /**
- * What to do with an incoming patient whose EMR number already exists on this device.
- * `skip` leaves the local record untouched; `replace` discards it in favour of the archive's.
+ * How to resolve a same-EMR/different-name collision. Only these ever need a user choice; every
+ * other collision merges. `merge` folds the incoming record into the local one; `addAsNew` keeps
+ * both by giving the incoming record a freshly generated EMR.
  */
-export type ConflictPolicy = "skip" | "replace";
+export type ImportDecision = "merge" | "addAsNew";
 
-export type ImportSummary = {
-    /** Patients whose EMR did not exist locally. */
-    imported: number;
-    /** Existing patients overwritten under the `replace` policy. */
-    replaced: number;
-    /** Existing patients left alone under the `skip` policy. */
-    skipped: number;
-    /** Records in the archive that repeat an EMR already claimed earlier in the same archive. */
+/** One incoming patient, resolved against local data so the UI can decide what to surface. */
+export type ArchivePlanEntry = {
+    emrNumber: string;
+    /** Grouping token in the archive; not an identity. */
+    folderName: string;
+    incomingName: string;
+    /** The local patient's name when this EMR already exists here, else null. */
+    localName: string | null;
+    /** Whether a patient with this EMR already exists on this device. */
+    exists: boolean;
+    /** Same EMR, but the names clearly differ — the one case worth surfacing to the user. */
+    nameMismatch: boolean;
+};
+
+export type ArchiveAnalysis = {
+    /** Provenance from the archive's `backup.json`, or null for archives without one. */
+    manifest: BackupManifest | null;
+    /** Resolvable patients, deduped by EMR (first occurrence wins). */
+    plan: ArchivePlanEntry[];
+    /** Records repeating an EMR already claimed earlier in the same archive. */
     duplicateInArchive: number;
-    /** Records that couldn't be read, or that carry no usable EMR number. */
+    /** Records with no usable EMR number. */
     invalid: number;
 };
 
-export type ImportResult = ({ cancelled: false } & ImportSummary) | { cancelled: true };
+export type ImportSummary = {
+    /** Brand-new patients (EMR absent locally). */
+    imported: number;
+    /** Patients merged into an existing same-EMR record. */
+    merged: number;
+    /** Name-mismatch records added under a freshly generated EMR. */
+    addedAsNew: number;
+    /** Records repeating an EMR already claimed earlier in the same archive. */
+    duplicateInArchive: number;
+    /** Records that couldn't be read/written, or that carry no usable EMR number. */
+    invalid: number;
+};
 
 export type RestoreResult = ImportSummary & {
+    manifest: BackupManifest | null;
     /** The Drive file the records came from — adopt it as the keep-latest backup target. */
     fileId: string;
     /** When that backup was last written, for the "restored from …" confirmation. */
@@ -288,6 +324,18 @@ export const buildBackupZipAsync = async (
 
     const total = files.length;
 
+    // Tally provenance counts from the walk (patient.json / consultation.json / everything else
+    // being a photo) for the manifest.
+    let patientCount = 0;
+    let consultationCount = 0;
+    let photoCount = 0;
+    for (const { relPath } of files) {
+        const name = relPath.split("/").pop() ?? "";
+        if (name === STORAGE.patientFileName) patientCount += 1;
+        else if (name === STORAGE.consultationFileName) consultationCount += 1;
+        else if (!name.toLowerCase().endsWith(".json")) photoCount += 1;
+    }
+
     // Stream file bytes into an in-memory zip. We STORE (no deflate) because the payload is
     // almost entirely already-compressed JPEGs; deflating them wastes CPU/battery for no gain.
     const chunks: Uint8Array[] = [];
@@ -310,6 +358,17 @@ export const buildBackupZipAsync = async (
         onProgress?.({ phase: "archiving", current: i + 1, total });
         if ((i & 7) === 0) await tick();
     }
+
+    // Add the root manifest last. It sits above `patients/`, so importers ignore it for grouping
+    // and archives without one still import (see ./manifest and groupEntriesByPatient).
+    const manifest = buildManifest({
+        counts: { patients: patientCount, consultations: consultationCount, photos: photoCount },
+        email: getCurrentAccountEmail(),
+        originId: await getOrCreateOriginIdAsync(),
+    });
+    const manifestEntry = new ZipPassThrough(MANIFEST_FILE_NAME);
+    zip.add(manifestEntry);
+    manifestEntry.push(strToU8(JSON.stringify(manifest, null, 2)), true);
 
     zip.end();
     if (zipError) throw zipError;
@@ -465,35 +524,47 @@ const ensureDirForRelPathAsync = async (baseDir: Directory, relPath: string): Pr
     return dir;
 };
 
-/** A consultation from the archive, resolved to the number and folder it will occupy on disk. */
-type PlannedConsultation = {
+/** Parse an archived `patient.json`, or null when it's missing/unreadable. */
+const readPatientFromEntries = (entries: Record<string, Uint8Array>): Patient | null => {
+    const bytes = entries[STORAGE.patientFileName];
+    if (!bytes) return null;
+    try {
+        return JSON.parse(strFromU8(bytes)) as Patient;
+    } catch {
+        return null;
+    }
+};
+
+/** Fold case/whitespace for comparing two names. Empty on either side means "no signal". */
+const normalizeName = (name: string | null | undefined): string =>
+    (name ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+
+/** A consultation from the archive, resolved to the stable folder id it will occupy on disk. */
+type ArchiveConsultation = {
     /** Folder the archive stored it under, relative to the patient folder. */
     archiveDirRel: string;
-    /** Folder it will occupy here — the canonical zero-padded number. */
-    canonicalDirRel: string;
-    number: number;
+    /** Folder it will occupy here — its `createdAt`-derived timestamp id. */
+    stamp: string;
     consultation: Consultation;
 };
 
 /**
- * Decide, for every consultation in the archive, which number it keeps and which folder it
- * lands in. The folder name is the number, so an archive written before padding (or by hand)
- * is normalised here: `consultations/7` becomes `consultations/0007`.
- *
- * A consultation whose number can't be established, or that repeats a number already taken by
- * an earlier one, is dropped — carrying it in would break the "one number, one visit" rule.
+ * Resolve every consultation in the archive to its stable id. Identity is the timestamp derived
+ * from `createdAt` (not the archive's folder name), so a merge lands each visit in the same folder
+ * on every device. Within one archive we bump a same-millisecond collision so folders stay unique,
+ * realigning `createdAt` to keep the `id === folderStampFromCreatedAt(createdAt)` invariant.
  */
-const planConsultations = (entries: Record<string, Uint8Array>): PlannedConsultation[] => {
-    const consultationJsonRelPaths = Object.keys(entries).filter(
+const collectArchiveConsultations = (entries: Record<string, Uint8Array>): ArchiveConsultation[] => {
+    const relPaths = Object.keys(entries).filter(
         (rel) =>
             rel.startsWith(`${STORAGE.consultationsFolderName}/`) &&
             rel.endsWith(`/${STORAGE.consultationFileName}`),
     );
 
-    const planned: PlannedConsultation[] = [];
-    const claimed = new Set<number>();
+    const result: ArchiveConsultation[] = [];
+    const usedStamps = new Set<string>();
 
-    for (const relPath of consultationJsonRelPaths) {
+    for (const relPath of relPaths) {
         let consultation: Consultation;
         try {
             consultation = JSON.parse(strFromU8(entries[relPath])) as Consultation;
@@ -502,112 +573,198 @@ const planConsultations = (entries: Record<string, Uint8Array>): PlannedConsulta
         }
 
         const archiveDirRel = relPath.split("/").slice(0, -1).join("/"); // "consultations/<folder>"
-        const folderName = archiveDirRel.split("/").at(-1) ?? "";
 
-        // The folder name is the identity; fall back to the JSON only when it isn't numeric.
-        const number =
-            parseConsultationNumber(folderName) || coerceConsultationNumber(consultation.number);
-        if (number === 0 || claimed.has(number)) continue;
+        let ms = Date.parse(consultation.createdAt);
+        if (Number.isNaN(ms)) ms = 0;
+        let stamp = folderStampFromCreatedAt(new Date(ms).toISOString());
+        while (usedStamps.has(stamp)) {
+            ms += 1;
+            stamp = folderStampFromCreatedAt(new Date(ms).toISOString());
+        }
+        usedStamps.add(stamp);
+        consultation.createdAt = new Date(ms).toISOString();
 
-        claimed.add(number);
-        planned.push({
-            archiveDirRel,
-            canonicalDirRel: `${STORAGE.consultationsFolderName}/${formatConsultationNumber(number)}`,
-            number,
-            consultation,
-        });
+        result.push({ archiveDirRel, stamp, consultation });
     }
 
-    return planned;
+    return result;
 };
 
 /**
- * Write one patient folder from a group of zip entries, under the folder named by `emrNumber`
- * — which may differ from the folder name the archive used. Consultations are planned first so
- * their files can be redirected to canonical folders; images are then written so we can rewrite
- * the stored URIs (profile + consultation photos) to their new on-device locations, preserving
- * the original photo order. The corrected JSON is written last.
+ * Write the top-level (profile) images of a patient group into `patientDir` and resolve the
+ * profile photo URI to its freshly-written file. Consultation images live under `consultations/`
+ * and are handled per-consultation, so they're skipped here.
  */
-const importSinglePatientAsync = async (
-    patientsRoot: Directory,
-    emrNumber: string,
+const writeProfileImagesAsync = async (
+    patientDir: Directory,
     entries: Record<string, Uint8Array>,
-): Promise<void> => {
-    const patientJsonBytes = entries[STORAGE.patientFileName];
-    if (!patientJsonBytes) throw new Error("Missing patient.json");
-
-    const patient = JSON.parse(strFromU8(patientJsonBytes)) as Patient;
-    const patientDir = await getOrCreateChildDirectoryAsync(patientsRoot, emrNumber);
-
-    const planned = planConsultations(entries);
-    const canonicalByArchiveDir = new Map(planned.map((p) => [p.archiveDirRel, p.canonicalDirRel]));
-
-    // 1) Write every non-JSON (image/binary) file, remembering the new URI for each by its
-    //    path relative to the patient folder. Consultation images follow their folder to its
-    //    canonical name; images belonging to a dropped consultation are not written at all.
+    storedProfileUri: string | undefined,
+): Promise<string | undefined> => {
     const newUriByRelPath: Record<string, string> = {};
     for (const [relPath, bytes] of Object.entries(entries)) {
+        if (relPath.includes("/")) continue; // top-level only
         if (relPath.toLowerCase().endsWith(".json")) continue;
+        const dest = await ensureFileForRelPathAsync(patientDir, relPath);
+        dest.write(bytes);
+        newUriByRelPath[relPath] = dest.uri;
+    }
+    return resolveProfilePhotoUri(storedProfileUri, newUriByRelPath);
+};
 
-        let targetRelPath = relPath;
-        if (relPath.startsWith(`${STORAGE.consultationsFolderName}/`)) {
-            const archiveDirRel = relPath.split("/").slice(0, -1).join("/");
-            const canonicalDirRel = canonicalByArchiveDir.get(archiveDirRel);
-            if (!canonicalDirRel) continue; // orphan, or belongs to a dropped consultation
-            targetRelPath = `${canonicalDirRel}/${basename(relPath)}`;
-        }
+/**
+ * Write one consultation from the archive into `patientDir` under its canonical stamp folder,
+ * copying its images and rewriting `photoUris` to the new on-device files (original order kept,
+ * any unreferenced images appended). Overwrites the folder's contents if it already exists.
+ */
+const writeConsultationFilesAsync = async (
+    patientDir: Directory,
+    targetEmr: string,
+    ac: ArchiveConsultation,
+    entries: Record<string, Uint8Array>,
+): Promise<void> => {
+    const canonicalDirRel = `${STORAGE.consultationsFolderName}/${ac.stamp}`;
 
+    const newUriByBasename: Record<string, string> = {};
+    for (const [relPath, bytes] of Object.entries(entries)) {
+        if (relPath.toLowerCase().endsWith(".json")) continue;
+        if (!relPath.startsWith(`${ac.archiveDirRel}/`)) continue;
+        const targetRelPath = `${canonicalDirRel}/${basename(relPath)}`;
         const dest = await ensureFileForRelPathAsync(patientDir, targetRelPath);
         dest.write(bytes);
-        newUriByRelPath[targetRelPath] = dest.uri;
+        newUriByBasename[basename(relPath)] = dest.uri;
     }
 
-    // 2) Re-stamp identity from the EMR (the archive's own id may be a legacy opaque one), and
-    //    point the profile photo at its freshly-written file (if the patient had one).
-    patient.id = emrNumber;
-    patient.emrNumber = emrNumber;
-    patient.profilePhotoUri = resolveProfilePhotoUri(patient.profilePhotoUri, newUriByRelPath);
+    const source = ac.consultation;
+    const ordered = (source.photoUris ?? [])
+        .map((uri) => newUriByBasename[basename(uri)])
+        .filter((uri): uri is string => Boolean(uri));
+    const referenced = new Set((source.photoUris ?? []).map(basename));
+    const extras = Object.keys(newUriByBasename)
+        .filter((name) => !referenced.has(name))
+        .sort()
+        .map((name) => newUriByBasename[name]);
 
-    // 3) A number that arrived in this archive must never be reissued, even if its consultation
-    //    is later deleted — so the counter is at least the highest number we just imported.
-    patient.lastConsultationNumber = Math.max(
-        coerceConsultationNumber(patient.lastConsultationNumber),
-        ...planned.map((p) => p.number),
-        0,
-    );
+    const consultation: Consultation = {
+        id: ac.stamp,
+        patientId: targetEmr,
+        remarks: source.remarks ?? "",
+        photoUris: [...ordered, ...extras],
+        createdAt: source.createdAt,
+        updatedAt: source.updatedAt ?? source.createdAt,
+    };
 
-    // 4) Rewrite each consultation's photoUris to the new files, preserving original order.
-    for (const { canonicalDirRel, number, consultation } of planned) {
-        // Map original photo basenames -> new URIs (files were written with identical names).
-        const newUriByBasename: Record<string, string> = {};
-        for (const [imgRel, uri] of Object.entries(newUriByRelPath)) {
-            if (imgRel.startsWith(`${canonicalDirRel}/`)) {
-                newUriByBasename[basename(imgRel)] = uri;
-            }
-        }
+    const consultationDir = await ensureDirForRelPathAsync(patientDir, canonicalDirRel);
+    await writeJsonToDir(consultationDir, STORAGE.consultationFileName, consultation);
+};
 
-        const ordered = (consultation.photoUris ?? [])
-            .map((uri) => newUriByBasename[basename(uri)])
-            .filter((uri): uri is string => Boolean(uri));
+/**
+ * Write a brand-new patient folder from a group of zip entries, under the folder named by
+ * `targetEmr`. Used both for records whose EMR is absent locally and for name-mismatch records
+ * the user chose to add under a freshly generated EMR.
+ */
+const writeNewPatientAsync = async (
+    patientsRoot: Directory,
+    targetEmr: string,
+    entries: Record<string, Uint8Array>,
+): Promise<void> => {
+    const incoming = readPatientFromEntries(entries);
+    if (!incoming) throw new Error("Missing patient.json");
 
-        // Safety net: append any images on disk that weren't referenced by the original list.
-        const referenced = new Set((consultation.photoUris ?? []).map(basename));
-        const extras = Object.keys(newUriByBasename)
-            .filter((name) => !referenced.has(name))
-            .sort()
-            .map((name) => newUriByBasename[name]);
+    const patientDir = await getOrCreateChildDirectoryAsync(patientsRoot, targetEmr);
+    const profilePhotoUri = await writeProfileImagesAsync(patientDir, entries, incoming.profilePhotoUri);
 
-        consultation.id = formatConsultationNumber(number);
-        consultation.number = number;
-        consultation.patientId = emrNumber;
-        consultation.photoUris = [...ordered, ...extras];
-
-        const consultationDir = await ensureDirForRelPathAsync(patientDir, canonicalDirRel);
-        await writeJsonToDir(consultationDir, STORAGE.consultationFileName, consultation);
+    for (const ac of collectArchiveConsultations(entries)) {
+        await writeConsultationFilesAsync(patientDir, targetEmr, ac, entries);
     }
 
-    // 5) Write the corrected patient.json last.
+    const now = new Date().toISOString();
+    const patient: Patient = {
+        id: targetEmr,
+        emrNumber: targetEmr,
+        name: (incoming.name ?? "").trim() || "Unnamed",
+        age: incoming.age,
+        gender: incoming.gender,
+        phone: incoming.phone,
+        profilePhotoUri,
+        createdAt: incoming.createdAt ?? now,
+        updatedAt: incoming.updatedAt ?? now,
+    };
     await writeJsonToDir(patientDir, STORAGE.patientFileName, patient);
+
+    // Force the per-patient consultation index to rebuild from the freshly-written folders.
+    await consultationIndexService.deleteConsultationsByPatientAsync(targetEmr);
+};
+
+/** Whether `a`'s updatedAt is strictly newer than `b`'s (missing timestamps sort oldest). */
+const isNewer = (a: string | undefined, b: string | undefined): boolean =>
+    (Date.parse(a ?? "") || 0) > (Date.parse(b ?? "") || 0);
+
+/**
+ * Merge an archived patient into the existing same-EMR record. Nothing local is deleted: patient
+ * demographics take whichever side has the newer `updatedAt`, and consultations are unioned by
+ * their stamp id — an incoming visit the device lacks is added; a visit both hold is replaced only
+ * when the incoming copy is newer.
+ */
+const mergePatientAsync = async (
+    patientsRoot: Directory,
+    localEmr: string,
+    entries: Record<string, Uint8Array>,
+): Promise<void> => {
+    const patientDir = getExistingPatientDir(localEmr);
+    if (!patientDir) {
+        // Raced away since analysis — treat as a fresh write rather than losing the record.
+        await writeNewPatientAsync(patientsRoot, localEmr, entries);
+        return;
+    }
+
+    const incoming = readPatientFromEntries(entries);
+    const local = await readJsonFromDir<Patient>(patientDir, STORAGE.patientFileName);
+    if (!incoming || !local) throw new Error("Missing patient.json");
+
+    const incomingNewer = isNewer(incoming.updatedAt, local.updatedAt);
+
+    let profilePhotoUri = local.profilePhotoUri;
+    if (incomingNewer) {
+        // Only overwrite the profile if the incoming record actually carries one.
+        const written = await writeProfileImagesAsync(patientDir, entries, incoming.profilePhotoUri);
+        if (written) profilePhotoUri = written;
+    }
+
+    const merged: Patient = {
+        id: localEmr,
+        emrNumber: localEmr,
+        name: incomingNewer ? (incoming.name ?? "").trim() || local.name : local.name,
+        age: incomingNewer ? incoming.age : local.age,
+        gender: incomingNewer ? incoming.gender : local.gender,
+        phone: incomingNewer ? incoming.phone : local.phone,
+        profilePhotoUri,
+        createdAt: local.createdAt,
+        // Sort fresh: the record was just touched, whichever side won the demographics.
+        updatedAt: isNewer(incoming.updatedAt, local.updatedAt) ? incoming.updatedAt : local.updatedAt,
+    };
+
+    for (const ac of collectArchiveConsultations(entries)) {
+        const existingDir = getExistingConsultationDir(localEmr, ac.stamp);
+        if (existingDir) {
+            const localCons = await readJsonFromDir<Consultation>(existingDir, STORAGE.consultationFileName);
+            if (!isNewer(ac.consultation.updatedAt, localCons?.updatedAt)) continue; // keep local
+            await safeDeleteDir(existingDir);
+        }
+        await writeConsultationFilesAsync(patientDir, localEmr, ac, entries);
+    }
+
+    await writeJsonToDir(patientDir, STORAGE.patientFileName, merged);
+
+    // Rebuild the per-patient consultation index from disk (folders changed above).
+    await consultationIndexService.deleteConsultationsByPatientAsync(localEmr);
+};
+
+/** Generate a fresh EMR that collides with neither the disk nor others minted in this batch. */
+const generateReservedEmrAsync = async (reserved: Set<string>): Promise<string> => {
+    let emr = await generateEmrNumberAsync();
+    while (reserved.has(emr)) emr = await generateEmrNumberAsync();
+    reserved.add(emr);
+    return emr;
 };
 
 /**
@@ -622,106 +779,152 @@ const unzipOrThrow = (zipBytes: Uint8Array, message: string): Record<string, Uin
     }
 };
 
-/**
- * Merge every patient folder in `entries` into the dataset on disk, then rebuild the index.
- * Shared by file import and cloud restore — the only thing that differs is where the zip
- * came from. Requires storage to already be initialised.
- *
- * Every record is resolved to its EMR number *before* anything is written, because the EMR is
- * the sole basis for deciding what is a duplicate: of the local dataset (handled by `policy`)
- * and of the archive itself (first occurrence wins; later ones are reported, not merged).
- */
-const importEntriesAsync = async (
-    entries: Record<string, Uint8Array>,
-    policy: ConflictPolicy,
-    onProgress?: ProgressFn,
-): Promise<ImportSummary> => {
-    const groups = groupEntriesByPatient(entries);
-    const folderNames = Object.keys(groups);
-    if (folderNames.length === 0) {
-        throw new Error("No patient records were found in this file.");
+/** Thrown when the user backs out of the name-mismatch review, so callers abort without writing. */
+export class ImportCancelledError extends Error {
+    constructor() {
+        super("Import was cancelled.");
+        this.name = "ImportCancelledError";
     }
+}
 
-    let imported = 0;
-    let replaced = 0;
-    let skipped = 0;
+/**
+ * Ask the caller how to resolve the name-mismatch collisions. Returns per-EMR decisions, or null
+ * to cancel the whole import. Only invoked when there is at least one mismatch.
+ */
+export type DecisionResolver = (
+    mismatches: ArchivePlanEntry[],
+) => Promise<Record<string, ImportDecision> | null>;
+
+/**
+ * Resolve every incoming patient against local data without writing anything. Requires storage to
+ * be initialised (it reads local patient.json for name comparison). Also parses the manifest.
+ */
+export const analyzeArchiveEntriesAsync = async (
+    entries: Record<string, Uint8Array>,
+): Promise<ArchiveAnalysis> => {
+    await initStorageAsync();
+
+    const manifestBytes = entries[MANIFEST_FILE_NAME];
+    const manifest = parseManifest(manifestBytes ? strFromU8(manifestBytes) : undefined);
+
+    const groups = groupEntriesByPatient(entries);
+    const claimed = new Set<string>();
+    const plan: ArchivePlanEntry[] = [];
     let duplicateInArchive = 0;
     let invalid = 0;
 
-    // Resolve identity up front. A record with no usable EMR can't be placed, and a repeated
-    // EMR would otherwise have the archive silently overwrite itself as we iterate.
-    const claimed = new Set<string>();
-    const plan: { emrNumber: string; folderName: string }[] = [];
-
-    for (const folderName of folderNames) {
-        const emrNumber = readEmrNumberFromEntries(groups[folderName]);
+    for (const folderName of Object.keys(groups)) {
+        const group = groups[folderName];
+        const emrNumber = readEmrNumberFromEntries(group);
         if (!emrNumber) {
             invalid += 1;
-        } else if (claimed.has(emrNumber)) {
-            duplicateInArchive += 1;
-        } else {
-            claimed.add(emrNumber);
-            plan.push({ emrNumber, folderName });
             continue;
         }
-        delete groups[folderName]; // nothing to write — release the bytes now
+        if (claimed.has(emrNumber)) {
+            duplicateInArchive += 1;
+            continue;
+        }
+        claimed.add(emrNumber);
+
+        const incomingName = (readPatientFromEntries(group)?.name ?? "").trim();
+        const localDir = getExistingPatientDir(emrNumber);
+        let localName: string | null = null;
+        let nameMismatch = false;
+        if (localDir) {
+            const localPatient = await readJsonFromDir<Patient>(localDir, STORAGE.patientFileName);
+            localName = (localPatient?.name ?? "").trim();
+            const a = normalizeName(incomingName);
+            const b = normalizeName(localName);
+            nameMismatch = a !== "" && b !== "" && a !== b;
+        }
+
+        plan.push({
+            emrNumber,
+            folderName,
+            incomingName,
+            localName,
+            exists: Boolean(localDir),
+            nameMismatch,
+        });
     }
 
+    return { manifest, plan, duplicateInArchive, invalid };
+};
+
+/**
+ * Apply a previously-analyzed archive to disk: brand-new patients are written, same-EMR records
+ * merged, and name-mismatch records added under a fresh EMR when the user chose `addAsNew`
+ * (default is `merge`). Rebuilds the index afterwards. Never deletes a local patient.
+ */
+export const applyImportAsync = async (
+    entries: Record<string, Uint8Array>,
+    analysis: ArchiveAnalysis,
+    decisions: Record<string, ImportDecision>,
+    onProgress?: ProgressFn,
+): Promise<ImportSummary> => {
+    const groups = groupEntriesByPatient(entries);
     const patientsRoot = await getPatientsRootDirectoryAsync();
+
+    let imported = 0;
+    let merged = 0;
+    let addedAsNew = 0;
+    let invalid = analysis.invalid;
+    const reserved = new Set<string>();
+
+    const { plan } = analysis;
     const total = plan.length;
 
     for (let i = 0; i < plan.length; i += 1) {
-        const { emrNumber, folderName } = plan[i];
+        const entry = plan[i];
+        const group = groups[entry.folderName];
         onProgress?.({ phase: "extracting", current: i, total });
 
-        // The EMR — and only the EMR — decides whether this record already lives here.
-        const existingDir = getExistingPatientDir(emrNumber);
-        if (existingDir && policy === "skip") {
-            skipped += 1;
+        if (!group) {
+            invalid += 1;
         } else {
             try {
-                if (existingDir) {
-                    // Drop the whole folder rather than writing over it: photos the archive no
-                    // longer contains must not survive as orphans, and their index rows go too.
-                    await safeDeleteDir(existingDir);
-                    await consultationIndexService.deleteConsultationsByPatientAsync(emrNumber);
+                if (!entry.exists) {
+                    await writeNewPatientAsync(patientsRoot, entry.emrNumber, group);
+                    imported += 1;
+                } else if (entry.nameMismatch && (decisions[entry.emrNumber] ?? "merge") === "addAsNew") {
+                    const newEmr = await generateReservedEmrAsync(reserved);
+                    await writeNewPatientAsync(patientsRoot, newEmr, group);
+                    addedAsNew += 1;
+                } else {
+                    await mergePatientAsync(patientsRoot, entry.emrNumber, group);
+                    merged += 1;
                 }
-                await importSinglePatientAsync(patientsRoot, emrNumber, groups[folderName]);
-                if (existingDir) replaced += 1;
-                else imported += 1;
             } catch {
                 invalid += 1;
             }
         }
 
-        delete groups[folderName]; // release this patient's bytes for GC
+        delete groups[entry.folderName];
         onProgress?.({ phase: "extracting", current: i + 1, total });
         await tick();
     }
 
-    // The SQLite index is a rebuildable cache: rebuild it from the freshly-written folders and
-    // drop stale render-safe image copies so imported photos re-cache cleanly.
+    // The SQLite index is a rebuildable cache: rebuild patients from the freshly-written folders
+    // and drop stale render-safe image copies so imported photos re-cache cleanly.
     onProgress?.({ phase: "indexing", current: 0, total: 0 });
     await patientIndexService.rebuildAllPatientsAsync();
     await clearImageCacheAsync();
 
-    // Wake any screen that is already mounted and focused (the restore offered at sign-in
-    // lands on the patient list, which would otherwise never re-query).
+    // Wake any screen that is already mounted and focused (the restore offered at sign-in lands on
+    // the patient list, which would otherwise never re-query).
     bumpDatasetRevision();
 
-    return { imported, replaced, skipped, duplicateInArchive, invalid };
+    return { imported, merged, addedAsNew, duplicateInArchive: analysis.duplicateInArchive, invalid };
 };
 
-export const importDatasetAsync = async (
-    policy: ConflictPolicy,
+/** Pick a `.zip`, read it, and unzip it. Returns null if the user cancels the file picker. */
+export const pickAndReadArchiveAsync = async (
     onProgress?: ProgressFn,
-): Promise<ImportResult> => {
-    await initStorageAsync();
-
+): Promise<Record<string, Uint8Array> | null> => {
     onProgress?.({ phase: "reading", current: 0, total: 0 });
 
     const pickedUri = await pickBackupFileAsync();
-    if (!pickedUri) return { cancelled: true };
+    if (!pickedUri) return null;
 
     let zipBytes: Uint8Array;
     try {
@@ -730,8 +933,7 @@ export const importDatasetAsync = async (
         throw new Error("Couldn't read the selected file.");
     }
 
-    const entries = unzipOrThrow(zipBytes, "The selected file isn't a valid .zip archive.");
-    return { cancelled: false, ...(await importEntriesAsync(entries, policy, onProgress)) };
+    return unzipOrThrow(zipBytes, "The selected file isn't a valid .zip archive.");
 };
 
 // ---------------------------------------------------------------------------
@@ -739,11 +941,13 @@ export const importDatasetAsync = async (
 // ---------------------------------------------------------------------------
 
 /**
- * Pull the latest Drive backup and merge it into the dataset — import, with the archive
- * fetched instead of picked. Throws `NoCloudBackupError` when the account has none.
+ * Pull the latest Drive backup and merge it into the dataset — import, with the archive fetched
+ * instead of picked. Throws `NoCloudBackupError` when the account has none. When the archive holds
+ * name-mismatch collisions and a `resolveDecisions` callback is supplied, it is asked how to
+ * resolve them (returning null cancels the restore before anything is written).
  */
 export const restoreFromDriveAsync = async (
-    policy: ConflictPolicy,
+    resolveDecisions?: DecisionResolver,
     onProgress?: ProgressFn,
 ): Promise<RestoreResult> => {
     onProgress?.({ phase: "searching", current: 0, total: 0 });
@@ -768,8 +972,17 @@ export const restoreFromDriveAsync = async (
             "The cloud backup is damaged and couldn't be read.",
         );
 
-        const summary = await importEntriesAsync(entries, policy, onProgress);
-        return { ...summary, fileId: backup.id, modifiedTime: backup.modifiedTime };
+        const analysis = await analyzeArchiveEntriesAsync(entries);
+        const mismatches = analysis.plan.filter((p) => p.nameMismatch);
+        let decisions: Record<string, ImportDecision> = {};
+        if (mismatches.length > 0 && resolveDecisions) {
+            const resolved = await resolveDecisions(mismatches);
+            if (resolved === null) throw new ImportCancelledError();
+            decisions = resolved;
+        }
+
+        const summary = await applyImportAsync(entries, analysis, decisions, onProgress);
+        return { ...summary, manifest: analysis.manifest, fileId: backup.id, modifiedTime: backup.modifiedTime };
     } finally {
         deleteQuietly(tempFile);
     }

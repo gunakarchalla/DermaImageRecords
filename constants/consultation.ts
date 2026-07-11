@@ -1,14 +1,12 @@
-// A consultation is identified by a per-patient sequence number starting at 1, which is also
-// its folder name. See services/consultation/consultationNumber.ts for the helpers, and
-// types/models.ts for the invariant tying `Consultation.id` to `Consultation.number`.
+// A consultation is identified by a stable, `createdAt`-derived timestamp that is also its folder
+// name (see services/consultation/consultationNumber.ts). The per-patient visit number shown in
+// the UI is a *derived* ordinal over `createdAt`, computed by the index query — it is never stored
+// on disk. See types/models.ts for the invariant tying `Consultation.id` to its `createdAt`.
 export const CONSULTATION = {
     /**
-     * Folder names are zero-padded so a file manager lists visits in visit order (0001, 0002,
-     * …, 0010) rather than lexically (1, 10, 2). Numbers past 9999 simply grow wider; ordering
-     * inside the app never depends on the padding, only on the integer stored in the index.
+     * Folder-name shape for a consultation: `YYYYMMDD-HHMMSS-mmm` in UTC. Sortable lexically
+     * (which is chronological), filesystem-safe, and stable across devices because it is derived
+     * from the immutable `createdAt`.
      */
-    numberPadding: 4,
-
-    /** A consultation folder is named by its number and nothing else. */
-    folderNamePattern: /^\d+$/,
+    stampPattern: /^\d{8}-\d{6}-\d{3}$/,
 } as const;

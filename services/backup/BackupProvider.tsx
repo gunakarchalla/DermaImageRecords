@@ -24,7 +24,7 @@ import {
     isRetryableBackupError,
     restoreFromDriveAsync,
     type BackupProgress,
-    type ConflictPolicy,
+    type DecisionResolver,
     type RestoreResult,
 } from "./backupService";
 import {
@@ -55,10 +55,12 @@ type BackupContextValue = {
     /** Run a backup immediately. Rejects on failure so the caller can surface it. */
     backupNow: () => Promise<void>;
     /**
-     * Pull the latest Drive backup into the dataset. Rejects with `NoCloudBackupError` when the
-     * account has none, so the caller can say "no backup found" rather than "restore failed".
+     * Pull the latest Drive backup into the dataset (always merging). Rejects with
+     * `NoCloudBackupError` when the account has none, so the caller can say "no backup found"
+     * rather than "restore failed". `resolveDecisions`, when given, is asked how to handle
+     * same-EMR/different-name collisions (returning null cancels the restore).
      */
-    restoreFromCloud: (policy: ConflictPolicy) => Promise<RestoreResult>;
+    restoreFromCloud: (resolveDecisions?: DecisionResolver) => Promise<RestoreResult>;
 };
 
 const BackupContext = createContext<BackupContextValue | null>(null);
@@ -199,7 +201,7 @@ export function BackupProvider({ children }: { children: ReactNode }) {
      * backup could archive a half-restored dataset and overwrite the very file being read.
      */
     const restoreFromCloud = useCallback(
-        async (policy: ConflictPolicy): Promise<RestoreResult> => {
+        async (resolveDecisions?: DecisionResolver): Promise<RestoreResult> => {
             if (runningRef.current) {
                 throw new Error("A backup is already running. Try again in a moment.");
             }
@@ -207,7 +209,7 @@ export function BackupProvider({ children }: { children: ReactNode }) {
             setBusy(true);
             setProgress(null);
             try {
-                const result = await restoreFromDriveAsync(policy, setProgress);
+                const result = await restoreFromDriveAsync(resolveDecisions, setProgress);
                 // Adopt the restored archive as the keep-latest target, so the next backup
                 // overwrites it instead of stranding it and creating a second one.
                 persist({ ...settingsRef.current, driveFileId: result.fileId });
