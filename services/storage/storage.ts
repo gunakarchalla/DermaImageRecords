@@ -1,6 +1,6 @@
+import * as Crypto from "expo-crypto";
 import { File, type Directory } from "expo-file-system";
 
-import { IMAGE_FORMATS, IMAGE_FORMAT_KEYS } from "../../constants/preferences";
 import { STORAGE } from "../../constants/storage";
 import type {
     Consultation,
@@ -8,61 +8,149 @@ import type {
     Patient,
     PatientCreateInput,
     PatientUpdateInput,
+    PhotoEntry,
 } from "../../types/models";
-import { folderStampFromCreatedAt } from "../consultation/consultationNumber";
+import { toPersistedConsultation, toPersistedPatient } from "../../types/models";
+import {
+    CidTakenError,
+    nextSequentialCid,
+    requireValidCid,
+} from "../consultation/cid";
 import { bumpDatasetRevision } from "../datasetRevision";
 import { consultationIndexService } from "../indexing/consultationIndexService";
 import { patientIndexService } from "../indexing/patientIndexService";
 import { EmrNumberTakenError, requireValidEmrNumber } from "../patient/emr";
+import { folderNameKey } from "./folderNames";
 import {
-    findChildFile,
+    findChildDirectory,
     getOrCreateChildDirectoryAsync,
-    readJsonFromDir,
+    listEntriesSafe,
     replaceFileInDirectoryAsync,
     safeDeleteDir,
     safeDeleteFile,
     writeJsonToDir,
 } from "./fsUtils";
-import { encodeImageForStorageAsync } from "./imageEncoding";
+import { encodeImageForStorageAsync, encodeThumbnailAsync } from "./imageEncoding";
+import {
+    listFilesByName,
+    readConsultationRecordAsync,
+    readPatientAsync,
+    readPatientRecordAsync,
+    resolveConsultation,
+    resolvePatient,
+} from "./records";
 import {
     getExistingConsultationDir,
     getExistingPatientDir,
     getOrCreateConsultationsRootDirAsync,
     getOrCreatePatientDirAsync,
+    getPatientsRootDirectoryAsync,
     initStorageAsync,
 } from "./roots";
 
-const generateId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const newUid = () => Crypto.randomUUID();
 
-/**
- * Encode a photo per the user's image settings, then write it into `dir` as `<baseName>.<ext>`.
- * The extension follows the chosen format, so it can't be known before encoding.
- */
-const savePhotoToDirAsync = async (sourceUri: string, dir: Directory, baseName: string) => {
-    const encoded = await encodeImageForStorageAsync(sourceUri);
-    const destination = await replaceFileInDirectoryAsync(dir, `${baseName}.${encoded.ext}`, encoded.mimeType);
+/** Zero-padded photo number for `<EMR>-<CID>-<NN>` names; grows past 99 naturally. */
+const padPhotoNumber = (n: number) => String(n).padStart(2, "0");
 
-    // Write bytes into the SAF-created destination file.
+/** Write `bytes-producing` encoded image into `dir` as `name`. SAF needs create-then-write. */
+const writeEncodedImageAsync = async (
+    encoded: { uri: string; mimeType: string },
+    dir: Directory,
+    name: string,
+): Promise<File> => {
+    const destination = await replaceFileInDirectoryAsync(dir, name, encoded.mimeType);
     // NOTE: We cannot reliably use File.copy() to SAF/content URIs.
-    const src = new File(encoded.uri);
-    const bytes = await src.bytes();
+    const bytes = await new File(encoded.uri).bytes();
     destination.write(bytes);
-
-    // No MediaLibrary duplication: this folder is the single source of truth.
-    return { uri: destination.uri, fileName: destination.name };
+    await safeDeleteFile(encoded.uri);
+    return destination;
 };
 
 /**
- * The profile photo has a fixed stem but a format-dependent extension, so switching format
- * would otherwise strand the previous `profile.<old-ext>` next to the new one.
+ * Encode + store one photo and its thumbnail under the consultation's human-readable
+ * naming scheme. Returns the persisted entry and the resolved URIs.
  */
-const deleteStaleProfilePhotosAsync = async (dir: Directory, keepFileName: string) => {
-    for (const format of IMAGE_FORMAT_KEYS) {
-        const name = `${STORAGE.profilePhotoBaseName}.${IMAGE_FORMATS[format].ext}`;
-        if (name === keepFileName) continue;
-        const stale = findChildFile(dir, name);
-        if (stale) await safeDeleteFile(stale);
+const savePhotoToDirAsync = async (
+    sourceUri: string,
+    dir: Directory,
+    emr: string,
+    cid: string,
+    photoNumber: number,
+): Promise<{ entry: PhotoEntry; uri: string; thumbUri: string | null }> => {
+    const stem = `${emr}-${cid}-${padPhotoNumber(photoNumber)}`;
+
+    const encoded = await encodeImageForStorageAsync(sourceUri);
+    const photoFile = await writeEncodedImageAsync(encoded, dir, `${stem}.${encoded.ext}`);
+
+    // A failed thumbnail must never fail the save; grids fall back to the full image.
+    let thumb: string | undefined;
+    let thumbUri: string | null = null;
+    try {
+        const thumbsDir = await getOrCreateChildDirectoryAsync(dir, STORAGE.thumbsFolderName);
+        const encodedThumb = await encodeThumbnailAsync(photoFile.uri);
+        const thumbFile = await writeEncodedImageAsync(encodedThumb, thumbsDir, `${stem}.jpg`);
+        thumb = `${STORAGE.thumbsFolderName}/${stem}.jpg`;
+        thumbUri = thumbFile.uri;
+    } catch {
+        thumb = undefined;
     }
+
+    return {
+        entry: {
+            uid: newUid(),
+            file: photoFile.name,
+            thumb,
+            capturedAt: new Date().toISOString(),
+        },
+        uri: photoFile.uri,
+        thumbUri,
+    };
+};
+
+/**
+ * Write a newly picked profile photo (+ thumbnail) under a fresh content-addressed stem
+ * and delete any previous `profile-*` files. Returns the relative names + resolved URIs.
+ */
+const writeProfilePhotoAsync = async (dir: Directory, sourceUri: string) => {
+    const stem = `${STORAGE.profilePhotoPrefix}${newUid().slice(0, 8)}`;
+
+    const encoded = await encodeImageForStorageAsync(sourceUri);
+    const photoFile = await writeEncodedImageAsync(encoded, dir, `${stem}.${encoded.ext}`);
+
+    let profileThumb: string | undefined;
+    let profileThumbUri: string | undefined;
+    try {
+        const thumbsDir = await getOrCreateChildDirectoryAsync(dir, STORAGE.thumbsFolderName);
+        const encodedThumb = await encodeThumbnailAsync(photoFile.uri);
+        const thumbFile = await writeEncodedImageAsync(encodedThumb, thumbsDir, `${stem}.jpg`);
+        profileThumb = `${STORAGE.thumbsFolderName}/${stem}.jpg`;
+        profileThumbUri = thumbFile.uri;
+    } catch {
+        profileThumb = undefined;
+    }
+
+    // Delete stale profile photos (previous stems and their thumbs).
+    for (const [name, file] of listFilesByName(dir)) {
+        if (name.startsWith(STORAGE.profilePhotoPrefix) && name !== photoFile.name) {
+            await safeDeleteFile(file);
+        }
+    }
+    const thumbsDir = findChildDirectory(dir, STORAGE.thumbsFolderName);
+    if (thumbsDir) {
+        for (const [name, file] of listFilesByName(thumbsDir)) {
+            if (name.startsWith(STORAGE.profilePhotoPrefix) && name !== `${stem}.jpg`) {
+                await safeDeleteFile(file);
+            }
+        }
+    }
+
+    return {
+        profilePhoto: photoFile.name,
+        profileThumb,
+        profilePhotoUri: photoFile.uri,
+        profileThumbUri,
+    };
 };
 
 export const initStorage = async () => {
@@ -73,7 +161,7 @@ export const getPatient = async (patientId: string): Promise<Patient | null> => 
     await initStorage();
     const dir = getExistingPatientDir(patientId);
     if (!dir) return null;
-    return readJsonFromDir<Patient>(dir, STORAGE.patientFileName);
+    return readPatientAsync(dir);
 };
 
 export const deletePatient = async (patientId: string) => {
@@ -83,8 +171,6 @@ export const deletePatient = async (patientId: string) => {
     // If the folder is missing (deleted externally), treat it as already deleted on disk.
     // The filesystem is the source-of-truth; the SQLite DB is rebuildable cache/index.
     if (dir) {
-        // Best-effort validation reads (source-of-truth is directory presence).
-        void (await readJsonFromDir<Patient>(dir, STORAGE.patientFileName));
         await safeDeleteDir(dir);
     }
 
@@ -96,55 +182,54 @@ export const deletePatient = async (patientId: string) => {
 };
 
 /**
- * Write `sourceUri` as the patient's profile photo and clear any previous one left behind by a
- * different image-format setting. Only call when the user actually picked a new image:
- * reprocessing an already-persisted SAF URI can fail on Android.
- */
-const writeProfilePhotoAsync = async (dir: Directory, sourceUri: string): Promise<string> => {
-    const saved = await savePhotoToDirAsync(sourceUri, dir, STORAGE.profilePhotoBaseName);
-    await deleteStaleProfilePhotosAsync(dir, saved.fileName);
-    return saved.uri;
-};
-
-/**
  * Create a patient under the folder named by their EMR number.
  *
- * The EMR is the identity (see types/models.ts), so this is the only place one is ever assigned.
- * Uniqueness is checked against the disk rather than the index, and checked *before*
- * `getOrCreatePatientDirAsync` — that helper adopts an existing folder by design, which would
- * silently merge two patients onto one record.
+ * The EMR is the identity (see types/models.ts), so this is the only place one is ever
+ * assigned. Uniqueness is checked case-insensitively against the disk rather than the
+ * index, and checked *before* `getOrCreatePatientDirAsync` — that helper adopts an
+ * existing folder by design, which would silently merge two patients onto one record.
  */
 export const createPatientAsync = async (input: PatientCreateInput): Promise<Patient> => {
     await initStorage();
 
     const emrNumber = requireValidEmrNumber(input.emrNumber);
 
-    const clash = getExistingPatientDir(emrNumber);
-    if (clash) {
-        const owner = await readJsonFromDir<Patient>(clash, STORAGE.patientFileName);
-        throw new EmrNumberTakenError(emrNumber, owner?.name);
+    // Case-insensitive clash check: a case-insensitive filesystem would conflate folders
+    // that differ only in case, so we must too.
+    const emrKey = folderNameKey(emrNumber);
+    const patientsRoot = await getPatientsRootDirectoryAsync();
+    for (const entry of listEntriesSafe(patientsRoot)) {
+        if (!(entry instanceof File) && folderNameKey(entry.name) === emrKey) {
+            const owner = await readPatientRecordAsync(entry as Directory);
+            throw new EmrNumberTakenError(emrNumber, owner?.name);
+        }
     }
 
     const dir = await getOrCreatePatientDirAsync(emrNumber);
     const now = new Date().toISOString();
 
     const patient: Patient = {
+        schema: 2,
+        uid: newUid(),
         id: emrNumber,
         emrNumber,
         name: input.name.trim(),
         age: input.age,
         gender: input.gender,
         phone: input.phone?.trim() || undefined,
-        profilePhotoUri: undefined,
         createdAt: now,
         updatedAt: now,
     };
 
     if (input.profilePhotoUri) {
-        patient.profilePhotoUri = await writeProfilePhotoAsync(dir, input.profilePhotoUri);
+        const saved = await writeProfilePhotoAsync(dir, input.profilePhotoUri);
+        patient.profilePhoto = saved.profilePhoto;
+        patient.profileThumb = saved.profileThumb;
+        patient.profilePhotoUri = saved.profilePhotoUri;
+        patient.profileThumbUri = saved.profileThumbUri;
     }
 
-    await writeJsonToDir(dir, STORAGE.patientFileName, patient);
+    await writeJsonToDir(dir, STORAGE.patientFileName, toPersistedPatient(patient));
     await patientIndexService.upsertPatientAsync(patient);
 
     bumpDatasetRevision();
@@ -153,7 +238,9 @@ export const createPatientAsync = async (input: PatientCreateInput): Promise<Pat
 
 /**
  * Update a patient's details. The EMR cannot change — `PatientUpdateInput` has no such field,
- * and identity is re-derived from the folder we found rather than from anything the caller passed.
+ * and identity is re-derived from the folder we found rather than from anything the caller
+ * passed. If the existing record can't be read, the update aborts: silently re-minting
+ * `uid`/`createdAt` would corrupt identity and history.
  */
 export const updatePatientAsync = async (patientId: string, input: PatientUpdateInput): Promise<Patient> => {
     await initStorage();
@@ -161,30 +248,35 @@ export const updatePatientAsync = async (patientId: string, input: PatientUpdate
     const dir = getExistingPatientDir(patientId);
     if (!dir) throw new Error("That patient no longer exists on this device.");
 
-    const existing = await readJsonFromDir<Patient>(dir, STORAGE.patientFileName);
-    const now = new Date().toISOString();
+    const existing = await readPatientRecordAsync(dir);
+    if (!existing) {
+        throw new Error("This patient's record could not be read, so it wasn't changed.");
+    }
+    const resolved = resolvePatient(dir, existing);
 
     const patient: Patient = {
-        id: patientId,
-        emrNumber: patientId,
+        ...existing,
         name: input.name.trim(),
         age: input.age,
         gender: input.gender,
         phone: input.phone?.trim() || undefined,
-        profilePhotoUri: existing?.profilePhotoUri,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
+        updatedAt: new Date().toISOString(),
+        profilePhotoUri: resolved.profilePhotoUri,
+        profileThumbUri: resolved.profileThumbUri,
     };
 
     const hasNewProfilePhoto = Boolean(
-        input.profilePhotoUri && input.profilePhotoUri !== existing?.profilePhotoUri
+        input.profilePhotoUri && input.profilePhotoUri !== resolved.profilePhotoUri,
     );
-
     if (hasNewProfilePhoto && input.profilePhotoUri) {
-        patient.profilePhotoUri = await writeProfilePhotoAsync(dir, input.profilePhotoUri);
+        const saved = await writeProfilePhotoAsync(dir, input.profilePhotoUri);
+        patient.profilePhoto = saved.profilePhoto;
+        patient.profileThumb = saved.profileThumb;
+        patient.profilePhotoUri = saved.profilePhotoUri;
+        patient.profileThumbUri = saved.profileThumbUri;
     }
 
-    await writeJsonToDir(dir, STORAGE.patientFileName, patient);
+    await writeJsonToDir(dir, STORAGE.patientFileName, toPersistedPatient(patient));
     await patientIndexService.upsertPatientAsync(patient);
 
     bumpDatasetRevision();
@@ -195,7 +287,8 @@ export const getConsultation = async (patientId: string, consultationId: string)
     await initStorage();
     const dir = getExistingConsultationDir(patientId, consultationId);
     if (!dir) return null;
-    return readJsonFromDir<Consultation>(dir, STORAGE.consultationFileName);
+    const persisted = await readConsultationRecordAsync(dir);
+    return persisted ? resolveConsultation(dir, persisted) : null;
 };
 
 export const deleteConsultation = async (patientId: string, consultationId: string) => {
@@ -205,47 +298,35 @@ export const deleteConsultation = async (patientId: string, consultationId: stri
 
     const dir = getExistingConsultationDir(patientId, consultationId);
     if (dir) {
-        // Best-effort validation read (source-of-truth is directory presence).
-        void (await readJsonFromDir<Consultation>(dir, STORAGE.consultationFileName));
         await safeDeleteDir(dir);
     }
 
     // Always keep SQLite index in sync, even when the folder is already gone.
     await consultationIndexService.deleteConsultationAsync(patientId, consultationId);
 
-    // Deleting a consultation is a patient record mutation; keep patient metadata/index in sync.
-    // The visit number is derived from `createdAt` order, so the remaining visits simply re-label
-    // themselves — there is no counter to maintain.
-    const patient = patientDir ? await readJsonFromDir<Patient>(patientDir, STORAGE.patientFileName) : null;
+    // Deleting a consultation is a patient record mutation; keep patient metadata/index in
+    // sync. The visit number is derived from `createdAt` order, so the remaining visits
+    // simply re-label themselves — there is no counter to maintain.
+    const patient = patientDir ? await readPatientRecordAsync(patientDir) : null;
     if (patient && patientDir) {
         patient.updatedAt = new Date().toISOString();
         await writeJsonToDir(patientDir, STORAGE.patientFileName, patient);
-        await patientIndexService.upsertPatientAsync(patient);
+        await patientIndexService.upsertPatientAsync(resolvePatient(patientDir, patient));
     }
 
     bumpDatasetRevision();
 };
 
-/**
- * Allocate a fresh id + `createdAt` for a new consultation. The id is the `createdAt`-derived
- * timestamp stamp (see services/consultation/consultationNumber.ts). Creation is sequential, so a
- * collision is only possible in the same millisecond — bump by 1 ms until the folder name is free,
- * preserving the `id === folderStampFromCreatedAt(createdAt)` invariant and keeping folders unique.
- */
-const allocateConsultationStamp = (patientId: string): { id: string; createdAt: string } => {
-    let ms = Date.now();
-    for (;;) {
-        const createdAt = new Date(ms).toISOString();
-        const id = folderStampFromCreatedAt(createdAt);
-        if (!getExistingConsultationDir(patientId, id)) return { id, createdAt };
-        ms += 1;
-    }
-};
+/** List the patient's existing consultation folder names (one disk listing). */
+const listConsultationNames = (consultationsDir: Directory): string[] =>
+    listEntriesSafe(consultationsDir)
+        .filter((entry) => !(entry instanceof File))
+        .map((entry) => entry.name);
 
 export const saveConsultation = async (
     patientId: string,
     consultationId: string | null,
-    input: ConsultationInput
+    input: ConsultationInput,
 ): Promise<Consultation> => {
     await initStorage();
 
@@ -254,79 +335,132 @@ export const saveConsultation = async (
     const patientDirectory = getExistingPatientDir(patientId);
     if (!patientDirectory) throw new Error("That patient no longer exists on this device.");
 
-    const patient = await readJsonFromDir<Patient>(patientDirectory, STORAGE.patientFileName);
+    const patient = await readPatientRecordAsync(patientDirectory);
+    if (!patient) {
+        throw new Error("This patient's record could not be read, so nothing was saved.");
+    }
+
     const consultationsDir = await getOrCreateConsultationsRootDirAsync(patientDirectory);
 
-    // Creating mints a fresh timestamp id; editing keeps the folder the id already names.
-    // The folder name is the identity, so an edit must never conjure a new folder.
+    // Creating assigns the CID (user-chosen or next sequential); editing keeps the folder
+    // the id already names. The folder name is the identity — an edit must never conjure
+    // a new folder, and a missing/corrupt record aborts rather than re-minting identity.
     let dir: Directory;
-    let id: string;
-    let createdAtForNew: string;
+    let existing: Awaited<ReturnType<typeof readConsultationRecordAsync>> = null;
+    let cid: string;
+    let uid: string;
+    let createdAt: string;
+    let nextPhotoNumber: number;
+
+    const now = new Date().toISOString();
 
     if (consultationId === null) {
-        const allocated = allocateConsultationStamp(patientId);
-        id = allocated.id;
-        createdAtForNew = allocated.createdAt;
-        dir = await getOrCreateChildDirectoryAsync(consultationsDir, id);
+        const existingNames = listConsultationNames(consultationsDir);
+        if (input.cid) {
+            cid = requireValidCid(input.cid);
+            const key = folderNameKey(cid);
+            if (existingNames.some((name) => folderNameKey(name) === key)) {
+                throw new CidTakenError(cid);
+            }
+        } else {
+            cid = nextSequentialCid(existingNames);
+        }
+        uid = newUid();
+        createdAt = now;
+        nextPhotoNumber = 1;
+        dir = await getOrCreateChildDirectoryAsync(consultationsDir, cid);
     } else {
         const found = getExistingConsultationDir(patientId, consultationId);
         if (!found) throw new Error("That consultation no longer exists on this device.");
         dir = found;
-        id = consultationId;
-        createdAtForNew = new Date().toISOString(); // fallback only, if the file is somehow missing
+        existing = await readConsultationRecordAsync(dir);
+        if (!existing) {
+            throw new Error("This consultation's record could not be read, so nothing was saved.");
+        }
+        cid = existing.cid;
+        uid = existing.uid;
+        createdAt = existing.createdAt;
+        nextPhotoNumber = existing.nextPhotoNumber;
     }
 
-    const now = new Date().toISOString();
-    const existing = (await readJsonFromDir<Consultation>(dir, STORAGE.consultationFileName)) ?? null;
+    // Diff photos against what is on disk. Existing photos are matched by their resolved
+    // URI; anything unmatched in the incoming list is a new capture/pick to encode. Photo
+    // numbers are never reused — edits and re-adds always mint the next number.
+    const resolvedExisting = existing ? resolveConsultation(dir, existing) : null;
+    const entryByUri = new Map<string, { entry: PhotoEntry; uri: string; thumbUri: string | null }>();
+    resolvedExisting?.photos.forEach((entry, index) => {
+        entryByUri.set(resolvedExisting.photoUris[index], {
+            entry,
+            uri: resolvedExisting.photoUris[index],
+            thumbUri: resolvedExisting.thumbUris[index],
+        });
+    });
 
-    const existingPhotoUris = existing?.photoUris ?? [];
-    const incomingUris = input.photoUris;
+    const incomingSet = new Set(input.photoUris);
+    const thumbsDir = findChildDirectory(dir, STORAGE.thumbsFolderName);
+    const thumbFilesByName = thumbsDir ? listFilesByName(thumbsDir) : null;
 
-    const preservedUris: string[] = [];
-    const existingSet = new Set(existingPhotoUris);
-    const incomingSet = new Set(incomingUris);
-
-    // Delete files that were removed by the user.
-    for (let index = 0; index < existingPhotoUris.length; index += 1) {
-        const uri = existingPhotoUris[index];
-        if (!incomingSet.has(uri)) {
-            await safeDeleteFile(uri);
+    // Delete files (and their thumbs) the user removed.
+    for (const [uri, kept] of entryByUri) {
+        if (incomingSet.has(uri)) continue;
+        await safeDeleteFile(uri);
+        if (kept.entry.thumb) {
+            const thumbName = kept.entry.thumb.split("/").pop();
+            const thumbFile = thumbName ? thumbFilesByName?.get(thumbName) : null;
+            if (thumbFile) await safeDeleteFile(thumbFile);
         }
     }
 
     // Rebuild in incoming order so edited photos stay at the same position.
-    for (const uri of incomingUris) {
-        if (preservedUris.includes(uri)) continue;
+    const photos: PhotoEntry[] = [];
+    const photoUris: string[] = [];
+    const thumbUris: (string | null)[] = [];
+    const seen = new Set<string>();
 
-        if (existingSet.has(uri)) {
-            preservedUris.push(uri);
+    for (const uri of input.photoUris) {
+        if (seen.has(uri)) continue;
+        seen.add(uri);
+
+        const kept = entryByUri.get(uri);
+        if (kept) {
+            photos.push(kept.entry);
+            photoUris.push(kept.uri);
+            thumbUris.push(kept.thumbUri);
             continue;
         }
 
-        const saved = await savePhotoToDirAsync(uri, dir, generateId());
-        preservedUris.push(saved.uri);
+        const saved = await savePhotoToDirAsync(uri, dir, patient.emrNumber, cid, nextPhotoNumber);
+        nextPhotoNumber += 1;
+        photos.push(saved.entry);
+        photoUris.push(saved.uri);
+        thumbUris.push(saved.thumbUri);
     }
 
     const consultation: Consultation = {
-        id,
+        schema: 2,
+        uid,
+        id: cid,
+        cid,
         patientId,
+        patientUid: patient.uid,
         remarks: input.remarks.trim(),
-        photoUris: preservedUris,
-        createdAt: existing?.createdAt ?? createdAtForNew,
+        photos,
+        nextPhotoNumber,
+        createdAt,
         updatedAt: now,
+        photoUris,
+        thumbUris,
     };
 
-    await writeJsonToDir(dir, STORAGE.consultationFileName, consultation);
+    await writeJsonToDir(dir, STORAGE.consultationFileName, toPersistedConsultation(consultation));
 
-    // Keep patient metadata in sync for sorting by last modified. The visit number is derived from
-    // `createdAt` order, so there is no counter to advance here.
-    if (patient) {
-        patient.updatedAt = now;
-        await writeJsonToDir(patientDirectory, STORAGE.patientFileName, patient);
-        await patientIndexService.upsertPatientAsync(patient);
-    }
+    // Keep patient metadata in sync for sorting by last modified. The visit number is derived
+    // from `createdAt` order, so there is no counter to advance here.
+    patient.updatedAt = now;
+    await writeJsonToDir(patientDirectory, STORAGE.patientFileName, patient);
+    await patientIndexService.upsertPatientAsync(resolvePatient(patientDirectory, patient));
 
-    // Update index.
+    // Update index (consultation row + gallery photo rows).
     await consultationIndexService.upsertConsultationAsync(consultation);
 
     bumpDatasetRevision();

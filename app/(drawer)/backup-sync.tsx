@@ -165,13 +165,19 @@ export default function BackupSyncScreen() {
   const onImport = useCallback(async () => {
     setBusy("import");
     setProgress(null);
+    let staged: Awaited<ReturnType<typeof pickAndReadArchiveAsync>> = null;
     try {
-      const entries = await pickAndReadArchiveAsync(setProgress);
-      if (!entries) return; // user cancelled the file picker
+      staged = await pickAndReadArchiveAsync(setProgress);
+      if (!staged) return; // user cancelled the file picker
 
-      const analysis = await analyzeArchiveEntriesAsync(entries);
+      const analysis = await analyzeArchiveEntriesAsync(staged);
       if (analysis.plan.length === 0) {
-        Alert.alert("Nothing to import", "No patient records were found in this file.");
+        Alert.alert(
+          "Nothing to import",
+          analysis.legacy > 0
+            ? "This file was exported by an older version of the app and can't be imported."
+            : "No patient records were found in this file.",
+        );
         return;
       }
 
@@ -179,7 +185,7 @@ export default function BackupSyncScreen() {
       const decisions = mismatches.length > 0 ? await showReviewAsync(mismatches) : {};
       if (decisions === null) return; // user cancelled the review
 
-      const result = await applyImportAsync(entries, analysis, decisions, setProgress);
+      const result = await applyImportAsync(staged, analysis, decisions, setProgress);
       Alert.alert(
         "Import complete",
         [restoredFromLine(analysis.manifest, null), ...summaryLines(result)]
@@ -189,6 +195,7 @@ export default function BackupSyncScreen() {
     } catch (error) {
       Alert.alert("Import failed", (error as Error).message);
     } finally {
+      staged?.dispose();
       setBusy(null);
       setProgress(null);
     }

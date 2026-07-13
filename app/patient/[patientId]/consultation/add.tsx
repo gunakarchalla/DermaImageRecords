@@ -18,9 +18,17 @@ import {
   DictationButton,
   DictationStatus,
 } from "../../../../components/DictationButton";
+import { IdFieldWithGenerate } from "../../../../components/ui/IdFieldWithGenerate";
+import { CONSULTATION } from "../../../../constants/consultation";
 import { useDictation } from "../../../../hooks/useDictation";
 import { useResolvedPhotoUris } from "../../../../hooks/useResolvedImageUri";
 import { useThemeColors } from "../../../../hooks/useThemeColors";
+import {
+  canonicalizeCid,
+  CidTakenError,
+  generateCidAsync,
+  validateCid,
+} from "../../../../services/consultation/cid";
 import { consumeConsultationCaptureQueue } from "../../../../services/consultationCaptureHandoff";
 import { appendTranscript } from "../../../../services/dictation/correctTranscript";
 import {
@@ -42,6 +50,25 @@ export default function AddConsultationScreen() {
   const photoPreviewUris = useResolvedPhotoUris(photos);
   const [loading, setLoading] = useState(false);
   const [pickingImage, setPickingImage] = useState(false);
+
+  // The CID is chosen (or generated) only when creating; it is immutable afterwards.
+  const isEditing = Boolean(consultationId);
+  const [cid, setCid] = useState("");
+  const [cidError, setCidError] = useState<string | null>(null);
+  const [generatingCid, setGeneratingCid] = useState(false);
+
+  const handleGenerateCid = async () => {
+    if (!patientId) return;
+    setGeneratingCid(true);
+    try {
+      setCid(await generateCidAsync(patientId));
+      setCidError(null);
+    } catch (error) {
+      Alert.alert("Couldn't generate an ID", (error as Error).message);
+    } finally {
+      setGeneratingCid(false);
+    }
+  };
 
   // Dictated speech is appended, never substituted, so it composes with whatever
   // the clinician has already typed.
@@ -151,14 +178,29 @@ export default function AddConsultationScreen() {
       return;
     }
 
+    // An empty CID means "number automatically"; a typed one is validated inline.
+    const canonicalCid = canonicalizeCid(cid);
+    if (!isEditing && canonicalCid) {
+      const problem = validateCid(canonicalCid);
+      if (problem) {
+        setCidError(problem);
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       await saveConsultation(patientId, consultationId ?? null, {
         remarks,
         photoUris: photos,
+        cid: !isEditing && canonicalCid ? canonicalCid : undefined,
       });
       router.back();
-    } catch {
+    } catch (error) {
+      if (error instanceof CidTakenError) {
+        setCidError(error.message);
+        return;
+      }
       Alert.alert("Save failed", "Could not save consultation.");
     } finally {
       setLoading(false);
@@ -183,6 +225,37 @@ export default function AddConsultationScreen() {
             <Feather name="x" size={24} color={colors.iconStrong} />
           </Pressable>
         </View>
+
+        {isEditing ? (
+          <View className="mb-4">
+            <Text className="text-sm text-slate-600 mb-1 dark:text-slate-400">
+              Consultation ID
+            </Text>
+            <View className="flex-row items-center justify-between bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 dark:bg-slate-800 dark:border-slate-700">
+              <Text className="text-slate-500 dark:text-slate-400">{consultationId}</Text>
+              <Feather name="lock" size={14} color={colors.iconMuted} />
+            </View>
+            <Text className="text-xs text-slate-400 mt-1 dark:text-slate-500">
+              A consultation ID can&apos;t be changed once it is created.
+            </Text>
+          </View>
+        ) : (
+          <IdFieldWithGenerate
+            label="Consultation ID"
+            value={cid}
+            onChangeText={(text) => {
+              setCid(text);
+              if (cidError) setCidError(null);
+            }}
+            error={cidError}
+            onGenerate={() => void handleGenerateCid()}
+            generating={generatingCid}
+            maxLength={CONSULTATION.maxLength}
+            placeholder="Optional — numbered automatically"
+            helper="Leave empty to number this visit automatically (001, 002, …)."
+            generateAccessibilityLabel="Generate a consultation ID"
+          />
+        )}
 
         <View className="mb-4">
           <View className="flex-row items-center justify-between mb-2">

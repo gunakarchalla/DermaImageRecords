@@ -27,6 +27,44 @@ const resizeTargetFor = (width: number, height: number, maxDimension: MaxDimensi
 
 export type EncodedImage = { uri: string; ext: string; mimeType: string };
 
+/** Longest edge of a generated thumbnail. Small enough for 3-across grids at 3x density. */
+const THUMBNAIL_MAX_DIMENSION = 512;
+const THUMBNAIL_COMPRESS = 0.7;
+
+/**
+ * Produce a small JPEG thumbnail of `sourceUri` for list rows, grids, and filmstrips.
+ * Always JPEG regardless of the user's storage format — at 512px the quality difference
+ * is invisible and JPEG encodes fastest on Android.
+ */
+export const encodeThumbnailAsync = async (sourceUri: string): Promise<EncodedImage> => {
+    const nativeRefs: { release: () => void }[] = [];
+
+    try {
+        const decodeContext = ImageManipulator.manipulate(sourceUri);
+        nativeRefs.push(decodeContext);
+        const decoded = await decodeContext.renderAsync();
+        nativeRefs.push(decoded);
+
+        let image: ImageRef = decoded;
+        const target = resizeTargetFor(decoded.width, decoded.height, THUMBNAIL_MAX_DIMENSION);
+        if (target) {
+            const resizeContext = ImageManipulator.manipulate(decoded).resize(target);
+            nativeRefs.push(resizeContext);
+            image = await resizeContext.renderAsync();
+            nativeRefs.push(image);
+        }
+
+        const result = await image.saveAsync({
+            compress: THUMBNAIL_COMPRESS,
+            format: SaveFormat.JPEG,
+        });
+
+        return { uri: result.uri, ext: "jpg", mimeType: "image/jpeg" };
+    } finally {
+        for (const ref of nativeRefs.reverse()) ref.release();
+    }
+};
+
 /**
  * Re-encode a freshly captured/picked image using the user's image settings, returning a
  * cache URI plus the extension and mime type the destination file must be created with.

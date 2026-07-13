@@ -1,6 +1,5 @@
 // emr.ts transitively imports the SAF storage driver, which resolves Paths.document at
-// module load and cannot run under jest. Only the pure helpers are under test here;
-// Phase 3 moves them into services/storage/folderNames.ts and these mocks go away.
+// module load and cannot run under jest. Only the pure helpers are under test here.
 jest.mock("../../storage/roots", () => ({
     getPatientsRootDirectoryAsync: jest.fn(),
     initStorageAsync: jest.fn(),
@@ -11,16 +10,19 @@ jest.mock("../../storage/fsUtils", () => ({
 
 import {
     canonicalizeEmrNumber,
-    emrDisplayMaxLength,
     formatEmrNumberForDisplay,
     requireValidEmrNumber,
-    stripEmrDisplaySpacing,
     validateEmrNumber,
 } from "../emr";
 
 describe("canonicalizeEmrNumber", () => {
-    it("trims and uppercases", () => {
-        expect(canonicalizeEmrNumber("  abc123 ")).toBe("ABC123");
+    it("trims and preserves case", () => {
+        expect(canonicalizeEmrNumber("  abC123 ")).toBe("abC123");
+    });
+
+    it("normalizes to NFC so all platforms produce identical bytes", () => {
+        const nfd = "éclair"; // é as e + combining accent
+        expect(canonicalizeEmrNumber(nfd)).toBe("éclair");
     });
 
     it("maps null/undefined to the empty string", () => {
@@ -30,53 +32,62 @@ describe("canonicalizeEmrNumber", () => {
 });
 
 describe("validateEmrNumber", () => {
-    it("accepts a plain alphanumeric value", () => {
-        expect(validateEmrNumber("ABC123")).toBeNull();
-    });
-
-    it("rejects the empty string", () => {
-        expect(validateEmrNumber("")).toMatch(/enter an emr/i);
-    });
-
-    it("rejects values over the maximum length", () => {
-        expect(validateEmrNumber("A".repeat(25))).toMatch(/at most 24/);
-        expect(validateEmrNumber("A".repeat(24))).toBeNull();
-    });
-
-    it("rejects non-alphanumeric characters", () => {
-        for (const bad of ["AB 12", "AB-12", "AB.12", "AB/12"]) {
-            expect(validateEmrNumber(bad)).toMatch(/letters and numbers/i);
+    it("accepts alphanumerics, spaces, dashes, and unicode", () => {
+        for (const good of ["ABC123", "John Smith", "MRN-2024-001", "épreuve", "патиент7"]) {
+            expect(validateEmrNumber(good)).toBeNull();
         }
     });
 
-    it("rejects reserved route names", () => {
+    it("rejects the empty string", () => {
+        expect(validateEmrNumber("")).toMatch(/enter a/i);
+    });
+
+    it("rejects values over the maximum length", () => {
+        expect(validateEmrNumber("A".repeat(33))).toMatch(/at most 32/);
+        expect(validateEmrNumber("A".repeat(32))).toBeNull();
+    });
+
+    it("rejects characters invalid in folder names on any platform", () => {
+        for (const bad of ["A<B", "A>B", "A:B", 'A"B', "A/B", "A\\B", "A|B", "A?B", "A*B", "A~B"]) {
+            expect(validateEmrNumber(bad)).toMatch(/can't contain/i);
+        }
+    });
+
+    it("rejects leading/trailing dots", () => {
+        expect(validateEmrNumber(".hidden")).toMatch(/dot/i);
+        expect(validateEmrNumber("name.")).toMatch(/dot/i);
+    });
+
+    it("rejects Windows reserved device names, case-insensitively", () => {
+        for (const bad of ["CON", "con", "NUL", "com1", "LPT9"]) {
+            expect(validateEmrNumber(bad)).toMatch(/can't be used|reserved/i);
+        }
+    });
+
+    it("rejects reserved route names, case-insensitively", () => {
         expect(validateEmrNumber("ADD")).toMatch(/reserved/i);
+        expect(validateEmrNumber("add")).toMatch(/reserved/i);
     });
 });
 
 describe("requireValidEmrNumber", () => {
     it("returns the canonical form of a valid raw value", () => {
-        expect(requireValidEmrNumber(" abc123 ")).toBe("ABC123");
+        expect(requireValidEmrNumber(" abC123 ")).toBe("abC123");
     });
 
     it("throws on an invalid value", () => {
-        expect(() => requireValidEmrNumber("no/slash")).toThrow(/letters and numbers/i);
+        expect(() => requireValidEmrNumber("no/slash")).toThrow(/can't contain/i);
     });
 });
 
-describe("display formatting", () => {
-    it("groups from the left in threes", () => {
+describe("formatEmrNumberForDisplay", () => {
+    it("groups purely numeric EMRs in threes", () => {
         expect(formatEmrNumberForDisplay("123456789")).toBe("123 456 789");
         expect(formatEmrNumberForDisplay("1234")).toBe("123 4");
     });
 
-    it("round-trips through stripEmrDisplaySpacing", () => {
-        const canonical = "ABC123XYZ7";
-        expect(stripEmrDisplaySpacing(formatEmrNumberForDisplay(canonical))).toBe(canonical);
-    });
-
-    it("emrDisplayMaxLength accounts for group separators", () => {
-        // 24 chars in groups of 3 → 7 separating spaces.
-        expect(emrDisplayMaxLength).toBe(31);
+    it("shows non-numeric EMRs verbatim", () => {
+        expect(formatEmrNumberForDisplay("MRN-2024-001")).toBe("MRN-2024-001");
+        expect(formatEmrNumberForDisplay("John Smith")).toBe("John Smith");
     });
 });

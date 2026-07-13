@@ -1,19 +1,15 @@
 // Rules for the EMR number, which *is* the patient's identity: it names the patient's
 // folder on disk, is the `patientId` route param, and is the primary key of the SQLite
-// index. See services/patient/emr.ts for the helpers that enforce these rules.
-//
-// Because the EMR becomes a directory name, the charset is deliberately narrow — no
-// separators, no dots, no spaces, nothing a document provider could reinterpret.
+// index. See services/patient/emr.ts for the helpers that enforce these rules, and
+// services/storage/folderNames.ts for the cross-platform folder-name validation both
+// the EMR and the consultation ID share.
 export const EMR = {
-    /** Letters and digits only. Anything else could be unsafe as a folder name. */
-    pattern: /^[A-Za-z0-9]+$/,
-
-    maxLength: 24,
+    maxLength: 32,
 
     /**
-     * When shown to a clinician, an EMR is broken into groups of this many characters so a long
-     * identifier can be read off against a chart. Presentation only — the spaces never reach the
-     * canonical value, and therefore never reach a folder name, route param, or index key.
+     * When shown to a clinician, a purely numeric EMR is broken into groups of this many
+     * characters so a long identifier can be read off against a chart. Presentation only —
+     * the spaces never reach the canonical value, and non-numeric EMRs are shown verbatim.
      */
     displayGroupSize: 3,
 
@@ -32,7 +28,7 @@ export const EMR = {
 
     /**
      * The EMR is the `patientId` route segment, so it must not shadow a static sibling route
-     * under `app/patient/`. Compared against the canonical (uppercased) value.
+     * under `app/patient/`. Compared case-insensitively.
      */
-    reservedNames: ["ADD"] as readonly string[],
+    reservedNames: ["add"] as readonly string[],
 } as const;

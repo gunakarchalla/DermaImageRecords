@@ -7,9 +7,12 @@ export const STORAGE = {
 
     patientFileName: "patient.json",
     consultationFileName: "consultation.json",
-    // Extension is chosen at save time from the user's image format preference
-    // (see constants/preferences.ts), so only the stem is fixed.
-    profilePhotoBaseName: "profile",
+    // Thumbnails live beside their originals in this subfolder (no leading dot —
+    // some SAF document providers mishandle dot-prefixed names).
+    thumbsFolderName: "thumbs",
+    // New profile photos get a content-addressed stem (`profile-<rand8>`) so a changed
+    // photo changes its file name — image caches invalidate naturally, no cache busters.
+    profilePhotoPrefix: "profile-",
 
     // Stored in app sandbox Documents (config, not data) to remember the SAF root URI.
     storageRootConfigFileName: "DermaImageRecords.storage-root.json",

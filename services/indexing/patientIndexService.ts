@@ -1,10 +1,10 @@
 import { Directory } from "expo-file-system";
 
 import { INDEX_META } from "../../constants/indexing";
-import { STORAGE } from "../../constants/storage";
 import type { Patient } from "../../types/models";
 import { dermaDb, type PatientCursor, type PatientSortField, type SortDirection } from "../db/dermaDb";
-import { listEntriesSafe, readJsonFromDir } from "../storage/fsUtils";
+import { listEntriesSafe } from "../storage/fsUtils";
+import { isTempFolderName, readPatientAsync } from "../storage/records";
 import { getDatasetRootDirectoryAsync, getExistingPatientDir, getPatientsRootDirectoryAsync } from "../storage/roots";
 
 // Simple single-flight locks to prevent concurrent rebuilds/ensures.
@@ -54,13 +54,16 @@ export const patientIndexService = {
             await dermaDb.setMetaAsync(INDEX_META.datasetRootUri, root.uri);
             await dermaDb.setMetaAsync(INDEX_META.patientsLastReindexAt, new Date().toISOString());
 
-            // Index patients by reading patient.json in each folder.
-            const entries = listEntriesSafe(patientsRoot).filter((e) => e instanceof Directory) as Directory[];
+            // Index patients by reading + resolving patient.json in each folder. Temp/staging
+            // folders (import swaps) are never records.
+            const entries = listEntriesSafe(patientsRoot).filter(
+                (e): e is Directory => e instanceof Directory && !isTempFolderName(e.name),
+            );
 
             for (const dir of entries) {
-                const patient = await readJsonFromDir<Patient>(dir, STORAGE.patientFileName);
+                const patient = await readPatientAsync(dir);
                 if (!patient) continue;
-                await dermaDb.upsertPatientAsync(patient);
+                await dermaDb.upsertPatientAsync({ ...patient, id: dir.name, emrNumber: dir.name });
             }
 
             // Any per-patient consultation meta keys are now invalid.

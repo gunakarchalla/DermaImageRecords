@@ -31,8 +31,12 @@ export default function ViewConsultationScreen() {
   const [number, setNumber] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Resolve persisted SAF/content URIs to cache file:// URIs for rendering.
-  const photoDisplayUris = useResolvedPhotoUris(consultation?.photoUris ?? []);
+  // Grid tiles render thumbnails when present (full image as fallback), resolved from
+  // persisted SAF/content URIs to cache file:// URIs.
+  const gridSourceUris = (consultation?.photoUris ?? []).map(
+    (uri, index) => consultation?.thumbUris[index] ?? uri,
+  );
+  const photoDisplayUris = useResolvedPhotoUris(gridSourceUris);
 
   const load = useCallback(async () => {
     if (!patientId || !consultationId) return;
@@ -109,23 +113,28 @@ export default function ViewConsultationScreen() {
           </View>
         ) : (
           <View className="flex-row flex-wrap">
-            {consultation.photoUris.map((uri, index) => (
-              <Pressable
-                key={uri}
-                onPress={() =>
-                  router.push(
-                    `/patient/${patientId}/consultation/${consultationId}/photos?index=${index}`,
-                  )
-                }
-                accessibilityLabel="Open photo"
-              >
-                <Image
-                  source={{ uri: photoDisplayUris[uri] ?? uri }}
-                  className="h-32 w-32 mr-3 mb-3 rounded-xl"
-                  contentFit="cover"
-                />
-              </Pressable>
-            ))}
+            {consultation.photoUris.map((uri, index) => {
+              const source = consultation.thumbUris[index] ?? uri;
+              return (
+                <Pressable
+                  key={uri}
+                  onPress={() =>
+                    router.push(
+                      `/patient/${patientId}/consultation/${consultationId}/photos?index=${index}`,
+                    )
+                  }
+                  accessibilityLabel="Open photo"
+                >
+                  <Image
+                    source={{ uri: photoDisplayUris[source] ?? source }}
+                    recyclingKey={source}
+                    cachePolicy="memory-disk"
+                    className="h-32 w-32 mr-3 mb-3 rounded-xl"
+                    contentFit="cover"
+                  />
+                </Pressable>
+              );
+            })}
           </View>
         )}
       </ScrollView>

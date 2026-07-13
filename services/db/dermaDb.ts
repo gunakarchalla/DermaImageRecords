@@ -1,6 +1,11 @@
 import * as SQLite from "expo-sqlite";
 
-import type { Consultation, ConsultationIndexRow, Patient } from "../../types/models";
+import type {
+    Consultation,
+    ConsultationIndexRow,
+    Patient,
+    PhotoIndexRow,
+} from "../../types/models";
 
 // NOTE: SQLite is a rebuildable index only. The filesystem remains the source-of-truth.
 // We keep this layer minimal and defensive: callers can always rebuild from disk.
@@ -19,8 +24,11 @@ const DB_NAME = "derma-index.db";
  * v4: consultation identity moved to a `createdAt`-derived timestamp id; the stored `number`
  * column and `patients.lastConsultationNumber` were dropped. The visit number is now a derived
  * ordinal over `createdAt`, and consultations order/paginate by `createdAt`.
+ * v5 (data model v2): records gained immutable `uid`s; patients gained `profileThumbUri`;
+ * a new `photos` table (with a precomputed `sortKey` for keyset paging) powers the gallery.
+ * URI columns hold *resolved* device-local URIs — the portable truth on disk is relative.
  */
-const DB_SCHEMA_VERSION = 4;
+const DB_SCHEMA_VERSION = 5;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 let schemaReadyPromise: Promise<void> | null = null;
@@ -49,6 +57,7 @@ const ensureSchemaAsync = async () => {
         if (installedVersion !== DB_SCHEMA_VERSION) {
             await db.execAsync(
                 `
+                DROP TABLE IF EXISTS photos;
                 DROP TABLE IF EXISTS consultations;
                 DROP TABLE IF EXISTS patients;
                 DROP TABLE IF EXISTS meta;
@@ -67,12 +76,14 @@ const ensureSchemaAsync = async () => {
             -- therefore the uniqueness constraint on the EMR; no separate column is needed.
             CREATE TABLE IF NOT EXISTS patients (
                 id TEXT PRIMARY KEY NOT NULL,
+                uid TEXT NOT NULL,
                 name TEXT NOT NULL,
                 nameSort TEXT NOT NULL,
                 age INTEGER,
                 gender TEXT,
                 phone TEXT,
                 profilePhotoUri TEXT,
+                profileThumbUri TEXT,
                 createdAt TEXT NOT NULL,
                 updatedAt TEXT NOT NULL
             );
@@ -81,12 +92,13 @@ const ensureSchemaAsync = async () => {
             CREATE INDEX IF NOT EXISTS idx_patients_createdAt ON patients(createdAt);
             CREATE INDEX IF NOT EXISTS idx_patients_nameSort ON patients(nameSort);
 
-            -- \`id\` is the consultation's \`createdAt\`-derived timestamp and its folder name.
-            -- Ordering and pagination use \`createdAt\`; the visit number shown in the UI is a
-            -- derived ordinal computed at query time, not a stored column.
+            -- \`id\` is the consultation's CID and its folder name. Ordering and pagination
+            -- use \`createdAt\`; the visit number shown in the UI is a derived ordinal
+            -- computed at query time, not a stored column.
             CREATE TABLE IF NOT EXISTS consultations (
                 id TEXT NOT NULL,
                 patientId TEXT NOT NULL,
+                uid TEXT NOT NULL,
                 remarks TEXT NOT NULL,
                 photoCount INTEGER NOT NULL,
                 createdAt TEXT NOT NULL,
@@ -95,6 +107,24 @@ const ensureSchemaAsync = async () => {
             );
 
             CREATE INDEX IF NOT EXISTS idx_consultations_patient_createdAt ON consultations(patientId, createdAt);
+
+            -- Gallery feed. Rows are replaced wholesale per consultation on every save.
+            -- \`sortKey\` precomputes the newest-first ordering (capturedAt + tiebreaks) so
+            -- keyset pagination is a single-column comparison.
+            CREATE TABLE IF NOT EXISTS photos (
+                patientId TEXT NOT NULL,
+                consultationId TEXT NOT NULL,
+                uid TEXT NOT NULL,
+                file TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                uri TEXT NOT NULL,
+                thumbUri TEXT,
+                capturedAt TEXT NOT NULL,
+                sortKey TEXT NOT NULL,
+                PRIMARY KEY (patientId, consultationId, file)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_photos_sortKey ON photos(sortKey);
         `
         );
 
@@ -117,12 +147,24 @@ export type PatientCursor = {
     id: string;
 };
 
-/** Keyset cursor for a patient's consultations. `createdAt` orders the list; `id` (also derived
- *  from `createdAt`) is the tiebreak for the rare same-instant pair. */
+/** Keyset cursor for a patient's consultations. `createdAt` orders the list; `id` is the
+ *  tiebreak for the rare same-instant pair. */
 export type ConsultationCursor = {
     createdAt: string;
     id: string;
 };
+
+/** Keyset cursor for the gallery feed: the last row's precomputed `sortKey`. */
+export type PhotoCursor = {
+    sortKey: string;
+};
+
+/**
+ * Single-column ordering key for the photo feed: newest capture first, with stable
+ * tiebreaks. ISO timestamps sort lexically; the position is zero-padded so it does too.
+ */
+const photoSortKey = (capturedAt: string, patientId: string, consultationId: string, position: number) =>
+    `${capturedAt}|${patientId}|${consultationId}|${String(position).padStart(4, "0")}`;
 
 export const dermaDb = {
     ensureReadyAsync: async () => {
@@ -159,6 +201,7 @@ export const dermaDb = {
         await db.withExclusiveTransactionAsync(async (txn) => {
             await txn.execAsync(
                 `
+                DELETE FROM photos;
                 DELETE FROM consultations;
                 DELETE FROM patients;
                 DELETE FROM meta;
@@ -175,26 +218,31 @@ export const dermaDb = {
             await txn.runAsync(
                 `
                 INSERT INTO patients(
-                    id, name, nameSort, age, gender, phone, profilePhotoUri, createdAt, updatedAt
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, uid, name, nameSort, age, gender, phone,
+                    profilePhotoUri, profileThumbUri, createdAt, updatedAt
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
+                    uid = excluded.uid,
                     name = excluded.name,
                     nameSort = excluded.nameSort,
                     age = excluded.age,
                     gender = excluded.gender,
                     phone = excluded.phone,
                     profilePhotoUri = excluded.profilePhotoUri,
+                    profileThumbUri = excluded.profileThumbUri,
                     createdAt = excluded.createdAt,
                     updatedAt = excluded.updatedAt
             `,
                 [
                     patient.id,
+                    patient.uid,
                     patient.name,
                     normalizeSortText(patient.name),
                     patient.age ?? null,
                     patient.gender ?? null,
                     patient.phone ?? null,
                     patient.profilePhotoUri ?? null,
+                    patient.profileThumbUri ?? null,
                     patient.createdAt,
                     patient.updatedAt,
                 ]
@@ -206,6 +254,7 @@ export const dermaDb = {
         await ensureSchemaAsync();
         const db = await openDbAsync();
         await db.withExclusiveTransactionAsync(async (txn) => {
+            await txn.runAsync("DELETE FROM photos WHERE patientId = ?", [patientId]);
             await txn.runAsync("DELETE FROM consultations WHERE patientId = ?", [patientId]);
             await txn.runAsync("DELETE FROM patients WHERE id = ?", [patientId]);
         });
@@ -259,17 +308,20 @@ export const dermaDb = {
 
         const rows = await db.getAllAsync<{
             id: string;
+            uid: string;
             name: string;
             age: number | null;
             gender: string | null;
             phone: string | null;
             profilePhotoUri: string | null;
+            profileThumbUri: string | null;
             createdAt: string;
             updatedAt: string;
             nameSort: string;
         }>(
             `
-            SELECT id, name, age, gender, phone, profilePhotoUri, createdAt, updatedAt, nameSort
+            SELECT id, uid, name, age, gender, phone, profilePhotoUri, profileThumbUri,
+                   createdAt, updatedAt, nameSort
             FROM patients
             ${whereSql}
             ORDER BY ${sortExpr} ${direction}, id ${direction}
@@ -279,6 +331,8 @@ export const dermaDb = {
         );
 
         const items: Patient[] = rows.map((r) => ({
+            schema: 2,
+            uid: r.uid,
             id: r.id,
             emrNumber: r.id, // the id *is* the EMR; see types/models.ts
             name: r.name,
@@ -286,6 +340,7 @@ export const dermaDb = {
             gender: (r.gender as Patient["gender"]) ?? undefined,
             phone: r.phone ?? undefined,
             profilePhotoUri: r.profilePhotoUri ?? undefined,
+            profileThumbUri: r.profileThumbUri ?? undefined,
             createdAt: r.createdAt,
             updatedAt: r.updatedAt,
         }));
@@ -308,9 +363,10 @@ export const dermaDb = {
         await db.withExclusiveTransactionAsync(async (txn) => {
             await txn.runAsync(
                 `
-                INSERT INTO consultations(id, patientId, remarks, photoCount, createdAt, updatedAt)
-                VALUES(?, ?, ?, ?, ?, ?)
+                INSERT INTO consultations(id, patientId, uid, remarks, photoCount, createdAt, updatedAt)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(patientId, id) DO UPDATE SET
+                    uid = excluded.uid,
                     remarks = excluded.remarks,
                     photoCount = excluded.photoCount,
                     createdAt = excluded.createdAt,
@@ -319,12 +375,41 @@ export const dermaDb = {
                 [
                     consultation.id,
                     consultation.patientId,
+                    consultation.uid,
                     consultation.remarks,
                     consultation.photoUris.length,
                     consultation.createdAt,
                     consultation.updatedAt,
                 ]
             );
+
+            // Photo rows are replaced wholesale: the consultation's photo list is small and
+            // this keeps positions/URIs exact after any add/remove/edit.
+            await txn.runAsync("DELETE FROM photos WHERE patientId = ? AND consultationId = ?", [
+                consultation.patientId,
+                consultation.id,
+            ]);
+            for (let position = 0; position < consultation.photos.length; position += 1) {
+                const entry = consultation.photos[position];
+                await txn.runAsync(
+                    `
+                    INSERT INTO photos(
+                        patientId, consultationId, uid, file, position, uri, thumbUri, capturedAt, sortKey
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `,
+                    [
+                        consultation.patientId,
+                        consultation.id,
+                        entry.uid,
+                        entry.file,
+                        position,
+                        consultation.photoUris[position],
+                        consultation.thumbUris[position],
+                        entry.capturedAt,
+                        photoSortKey(entry.capturedAt, consultation.patientId, consultation.id, position),
+                    ]
+                );
+            }
         });
     },
 
@@ -332,6 +417,7 @@ export const dermaDb = {
         await ensureSchemaAsync();
         const db = await openDbAsync();
         await db.withExclusiveTransactionAsync(async (txn) => {
+            await txn.runAsync("DELETE FROM photos WHERE patientId = ? AND consultationId = ?", [patientId, consultationId]);
             await txn.runAsync("DELETE FROM consultations WHERE patientId = ? AND id = ?", [patientId, consultationId]);
         });
     },
@@ -340,8 +426,66 @@ export const dermaDb = {
         await ensureSchemaAsync();
         const db = await openDbAsync();
         await db.withExclusiveTransactionAsync(async (txn) => {
+            await txn.runAsync("DELETE FROM photos WHERE patientId = ?", [patientId]);
             await txn.runAsync("DELETE FROM consultations WHERE patientId = ?", [patientId]);
         });
+    },
+
+    /**
+     * Newest-first page of the global photo feed. Keyset pagination on the precomputed
+     * `sortKey`, so a page is one indexed range scan regardless of dataset size.
+     */
+    queryPhotosPageAsync: async (input: {
+        limit: number;
+        cursor?: PhotoCursor;
+    }): Promise<{ items: PhotoIndexRow[]; nextCursor?: PhotoCursor }> => {
+        await ensureSchemaAsync();
+        const db = await openDbAsync();
+
+        const args: (string | number)[] = [];
+        let whereSql = "";
+        if (input.cursor) {
+            whereSql = "WHERE sortKey < ?";
+            args.push(input.cursor.sortKey);
+        }
+
+        const rows = await db.getAllAsync<{
+            patientId: string;
+            consultationId: string;
+            uid: string;
+            file: string;
+            position: number;
+            uri: string;
+            thumbUri: string | null;
+            capturedAt: string;
+            sortKey: string;
+        }>(
+            `
+            SELECT patientId, consultationId, uid, file, position, uri, thumbUri, capturedAt, sortKey
+            FROM photos
+            ${whereSql}
+            ORDER BY sortKey DESC
+            LIMIT ?
+        `,
+            [...args, input.limit]
+        );
+
+        const items: PhotoIndexRow[] = rows.map((r) => ({
+            patientId: r.patientId,
+            consultationId: r.consultationId,
+            uid: r.uid,
+            file: r.file,
+            position: r.position,
+            uri: r.uri,
+            thumbUri: r.thumbUri,
+            capturedAt: r.capturedAt,
+        }));
+
+        const last = rows.at(-1);
+        const nextCursor =
+            last && rows.length === input.limit ? { sortKey: last.sortKey } : undefined;
+
+        return { items, nextCursor };
     },
 
     queryConsultationsPageAsync: async (input: {

@@ -21,9 +21,11 @@ export const PatientListItem = memo(function PatientListItem({
   onDelete,
 }: Props) {
   const colors = useThemeColors();
-  // `updatedAt` as version: a replaced profile photo behind the same URI fingerprints to a
-  // new cache entry; an unchanged one is a metadata query with a stable result.
-  const displayUri = useResolvedImageUri(patient.profilePhotoUri, patient.updatedAt);
+  // The 56px avatar renders the 512px thumbnail when one exists; profile file names are
+  // content-addressed, so no version param is needed — a new photo is a new URI.
+  const displayUri = useResolvedImageUri(
+    patient.profileThumbUri ?? patient.profilePhotoUri,
+  );
 
   return (
     <Pressable

@@ -1,15 +1,23 @@
 import { Directory } from "expo-file-system";
 
 import { consultationsPatientLastReindexAtKey } from "../../constants/indexing";
-import { STORAGE } from "../../constants/storage";
-import type { Consultation, ConsultationIndexRow } from "../../types/models";
-import { dermaDb, type ConsultationCursor } from "../db/dermaDb";
-import { listEntriesSafe, readJsonFromDir } from "../storage/fsUtils";
-import { getExistingConsultationDir, getExistingConsultationsRootDirForPatientAsync } from "../storage/roots";
+import type { ConsultationIndexRow, PhotoIndexRow } from "../../types/models";
+import { mapWithConcurrency } from "../async";
+import { dermaDb, type ConsultationCursor, type PhotoCursor } from "../db/dermaDb";
+import { listEntriesSafe } from "../storage/fsUtils";
+import { isTempFolderName, readConsultationAsync } from "../storage/records";
+import {
+    getExistingConsultationDir,
+    getExistingConsultationsRootDirForPatientAsync,
+    getPatientsRootDirectoryAsync,
+} from "../storage/roots";
 import { patientIndexService } from "./patientIndexService";
 
 // Prevent concurrent rebuilds for the same patientId (e.g., rapid navigation/focus events).
 const rebuildConsultationsPromiseByPatient = new Map<string, Promise<void>>();
+
+// Single-flight for the whole-dataset pass the gallery needs.
+let ensureAllPatientsPromise: Promise<void> | null = null;
 
 export const consultationIndexService = {
     ensureConsultationsIndexForPatientAsync: async (patientId: string) => {
@@ -34,14 +42,21 @@ export const consultationIndexService = {
 
             const consultationsRoot = await getExistingConsultationsRootDirForPatientAsync(patientId);
             if (consultationsRoot?.exists) {
-                const entries = listEntriesSafe(consultationsRoot).filter((e) => e instanceof Directory) as Directory[];
+                const entries = listEntriesSafe(consultationsRoot).filter(
+                    (e): e is Directory => e instanceof Directory && !isTempFolderName(e.name),
+                );
                 for (const dir of entries) {
-                    // A consultation folder is one that holds a consultation.json; the folder name
-                    // is the id. The display number is derived at query time, not stored here.
-                    const consultation = await readJsonFromDir<Consultation>(dir, STORAGE.consultationFileName);
+                    // A consultation folder is one that holds a v2 consultation.json; the folder
+                    // name is the CID. The display number is derived at query time, not stored.
+                    const consultation = await readConsultationAsync(dir);
                     if (!consultation) continue;
 
-                    await dermaDb.upsertConsultationAsync({ ...consultation, id: dir.name, patientId });
+                    await dermaDb.upsertConsultationAsync({
+                        ...consultation,
+                        id: dir.name,
+                        cid: dir.name,
+                        patientId,
+                    });
                 }
             }
 
@@ -56,9 +71,53 @@ export const consultationIndexService = {
         }
     },
 
-    upsertConsultationAsync: async (consultation: Consultation) => {
+    upsertConsultationAsync: async (consultation: Parameters<typeof dermaDb.upsertConsultationAsync>[0]) => {
         await consultationIndexService.ensureConsultationsIndexForPatientAsync(consultation.patientId);
         await dermaDb.upsertConsultationAsync(consultation);
+    },
+
+    /**
+     * Make sure every patient's consultations are indexed — the gallery pages over the
+     * whole `photos` table, and per-patient lazy indexing only covers patients the user
+     * has opened. Rebuilds only patients missing their reindex stamp; single-flight.
+     */
+    ensureAllPatientsIndexedAsync: async () => {
+        if (ensureAllPatientsPromise) return ensureAllPatientsPromise;
+
+        ensureAllPatientsPromise = (async () => {
+            await patientIndexService.ensurePatientsIndexAsync();
+
+            const patientsRoot = await getPatientsRootDirectoryAsync();
+            const patientIds = listEntriesSafe(patientsRoot)
+                .filter((e): e is Directory => e instanceof Directory && !isTempFolderName(e.name))
+                .map((dir) => dir.name);
+
+            const missing: string[] = [];
+            for (const patientId of patientIds) {
+                const stamp = await dermaDb.getMetaAsync(consultationsPatientLastReindexAtKey(patientId));
+                if (!stamp) missing.push(patientId);
+            }
+
+            // Concurrency covers the file reads; SQLite writes serialize internally.
+            await mapWithConcurrency(missing, 4, (patientId) =>
+                consultationIndexService.rebuildConsultationsForPatientAsync(patientId),
+            );
+        })();
+
+        try {
+            await ensureAllPatientsPromise;
+        } finally {
+            ensureAllPatientsPromise = null;
+        }
+    },
+
+    /** Newest-first page of the global photo feed (see dermaDb.queryPhotosPageAsync). */
+    queryPhotosPageAsync: async (input: {
+        limit: number;
+        cursor?: PhotoCursor;
+    }): Promise<{ items: PhotoIndexRow[]; nextCursor?: PhotoCursor }> => {
+        await consultationIndexService.ensureAllPatientsIndexedAsync();
+        return dermaDb.queryPhotosPageAsync(input);
     },
 
     deleteConsultationAsync: async (patientId: string, consultationId: string) => {

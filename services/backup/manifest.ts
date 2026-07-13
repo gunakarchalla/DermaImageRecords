@@ -11,7 +11,8 @@ import { Platform } from "react-native";
  * `patients/`) ignores it, and archives produced before this feature simply parse as `null`.
  */
 
-export const MANIFEST_SCHEMA_VERSION = 1;
+/** v2: the dataset inside is data-model v2 (uids, CIDs, relative paths, thumbs). */
+export const MANIFEST_SCHEMA_VERSION = 2;
 export const MANIFEST_FILE_NAME = "backup.json";
 
 export type BackupCounts = {
@@ -26,8 +27,6 @@ export type BackupManifest = {
     /** ISO timestamp the archive was written. */
     exportedAt: string;
     account: { email: string | null };
-    /** Stable per-install id of the device that produced this backup. */
-    originId: string | null;
     deviceName: string | null;
     platform: string;
     counts: BackupCounts;
@@ -36,13 +35,11 @@ export type BackupManifest = {
 export const buildManifest = (input: {
     counts: BackupCounts;
     email: string | null;
-    originId: string | null;
 }): BackupManifest => ({
     schemaVersion: MANIFEST_SCHEMA_VERSION,
     appVersion: Constants.expoConfig?.version ?? null,
     exportedAt: new Date().toISOString(),
     account: { email: input.email },
-    originId: input.originId,
     // `deviceName` is best-effort; expo-constants exposes it but may omit it on some platforms.
     deviceName: (Constants as { deviceName?: string }).deviceName ?? null,
     platform: Platform.OS,
@@ -67,7 +64,6 @@ export const parseManifest = (raw: string | undefined): BackupManifest | null =>
                 email:
                     typeof parsed.account?.email === "string" ? parsed.account.email : null,
             },
-            originId: typeof parsed.originId === "string" ? parsed.originId : null,
             deviceName: typeof parsed.deviceName === "string" ? parsed.deviceName : null,
             platform: typeof parsed.platform === "string" ? parsed.platform : "unknown",
             counts: {

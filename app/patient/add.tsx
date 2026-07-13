@@ -4,7 +4,6 @@ import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
@@ -15,15 +14,14 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { GenderPicker } from "../../components/ui/GenderPicker";
+import { IdFieldWithGenerate } from "../../components/ui/IdFieldWithGenerate";
+import { EMR } from "../../constants/patient";
 import { useResolvedImageUri } from "../../hooks/useResolvedImageUri";
 import { useThemeColors } from "../../hooks/useThemeColors";
 import {
   canonicalizeEmrNumber,
-  emrDisplayMaxLength,
   EmrNumberTakenError,
-  formatEmrNumberForDisplay,
   generateEmrNumberAsync,
-  stripEmrDisplaySpacing,
   validateEmrNumber,
 } from "../../services/patient/emr";
 import { createPatientAsync } from "../../services/storage/storage";
@@ -175,52 +173,21 @@ export default function AddPatientScreen() {
         </View>
 
         {/* The EMR identifies the patient everywhere (folder, route, index) and is fixed once
-            saved, so it leads the form. Border/error colours are inline `style` rather than
-            toggled classes — see the note in app/(drawer)/backup-sync.tsx. */}
-        <View className="mb-4">
-          <Text className="text-sm text-slate-600 mb-1 dark:text-slate-400">
-            EMR Number
-          </Text>
-          <View
-            className="flex-row items-center bg-white rounded-xl border dark:bg-slate-900"
-            style={{ borderColor: emrError ? colors.danger : colors.border }}
-          >
-            <TextInput
-              value={formatEmrNumberForDisplay(emrNumber)}
-              onChangeText={(text) => {
-                // Drop the grouping spaces the field inserted; keep every other character so a
-                // stray one still reaches `validateEmrNumber` and is explained to the user.
-                setEmrNumber(stripEmrDisplaySpacing(text));
-                if (emrError) setEmrError(null);
-              }}
-              placeholder="Required"
-              placeholderTextColor={colors.placeholder}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              maxLength={emrDisplayMaxLength}
-              className="flex-1 px-3 py-2 text-base text-slate-900 dark:text-slate-100"
-            />
-            <Pressable
-              onPress={() => void handleGenerateEmr()}
-              disabled={generatingEmr}
-              accessibilityLabel="Generate an EMR number"
-              className="px-3 py-2"
-            >
-              {generatingEmr ? (
-                <ActivityIndicator size="small" color={colors.icon} />
-              ) : (
-                <Feather name="refresh-cw" size={18} color={colors.iconStrong} />
-              )}
-            </Pressable>
-          </View>
-          <Text
-            className="text-xs mt-1"
-            style={{ color: emrError ? colors.danger : colors.placeholder }}
-          >
-            {emrError ??
-              "Letters and numbers only. Identifies the patient — it can't be changed later."}
-          </Text>
-        </View>
+            saved, so it leads the form. */}
+        <IdFieldWithGenerate
+          label="EMR Number"
+          value={emrNumber}
+          onChangeText={(text) => {
+            setEmrNumber(text);
+            if (emrError) setEmrError(null);
+          }}
+          error={emrError}
+          onGenerate={() => void handleGenerateEmr()}
+          generating={generatingEmr}
+          maxLength={EMR.maxLength}
+          generateAccessibilityLabel="Generate an EMR number"
+          helper="Identifies the patient — it can't be changed later."
+        />
 
         {[
           {
