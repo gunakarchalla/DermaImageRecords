@@ -27,7 +27,6 @@ export default function InfoLayout() {
       />
       <Stack.Screen name="about" options={{ title: "About" }} />
       <Stack.Screen name="creators" options={{ title: "Creators" }} />
-      <Stack.Screen name="ui-ux-guide" options={{ title: "UI/UX Guide" }} />
       <Stack.Screen name="license" options={{ title: "License" }} />
       <Stack.Screen
         name="privacy-policy"

@@ -42,7 +42,8 @@ export default function SignInScreen() {
           DermaImageRecords
         </Text>
         <Text className="mt-2 text-center text-sm text-slate-500 dark:text-slate-400">
-          Sign in to access your patient records. All data stays on this device.
+          Sign in to access your patient records. Data is stored on this device
+          and synced only to your own Google Drive if you enable it.
         </Text>
 
         <Pressable

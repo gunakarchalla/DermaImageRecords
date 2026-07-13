@@ -61,13 +61,6 @@ export default function InfoMenuScreen() {
       href: "/info/creators",
     },
     {
-      key: "ui-ux-guide",
-      label: "UI/UX Guide",
-      description: "How to get around the app",
-      icon: "compass",
-      href: "/info/ui-ux-guide",
-    },
-    {
       key: "license",
       label: "License",
       description: "Terms of use",
