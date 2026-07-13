@@ -1,8 +1,8 @@
 import { Feather } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
-import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useRef, useState } from "react";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -16,9 +16,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { FlashList } from "@shopify/flash-list";
 import { useColorScheme } from "nativewind";
 
+import { useDatasetFocusRefresh } from "../../../hooks/useDatasetFocusRefresh";
+import { useResolvedImageUri } from "../../../hooks/useResolvedImageUri";
 import { useThemeColors } from "../../../hooks/useThemeColors";
 import type { ConsultationCursor } from "../../../services/db/dermaDb";
-import { toRenderableImageUriAsync } from "../../../services/imageUri";
 import { consultationIndexService } from "../../../services/indexing/consultationIndexService";
 import { formatEmrNumberForDisplay } from "../../../services/patient/emr";
 import {
@@ -30,10 +31,49 @@ import { ConsultationIndexRow, Gender, Patient } from "../../../types/models";
 
 const CONSULTATIONS_PAGE_SIZE = 25;
 
-const withCacheBuster = (uri: string, cacheKey: string) => {
-  const separator = uri.includes("?") ? "&" : "?";
-  return `${uri}${separator}v=${encodeURIComponent(cacheKey)}`;
-};
+// Memoized row so FlashList recycling doesn't re-render untouched consultations.
+const ConsultationListItem = memo(function ConsultationListItem({
+  item,
+  onOpen,
+  onDelete,
+  dangerColor,
+}: {
+  item: ConsultationIndexRow;
+  onOpen: (item: ConsultationIndexRow) => void;
+  onDelete: (item: ConsultationIndexRow) => void;
+  dangerColor: string;
+}) {
+  return (
+    <Pressable
+      onPress={() => onOpen(item)}
+      className="bg-white rounded-xl p-3 mb-3 shadow-sm dark:bg-slate-900"
+    >
+      <View className="flex-row items-center justify-between mb-1">
+        <Text className="text-base font-semibold text-slate-900 dark:text-slate-100">
+          Consultation #{item.number}
+        </Text>
+        <View className="flex-row items-center">
+          <Text className="text-xs text-slate-500 dark:text-slate-400">
+            {new Date(item.updatedAt).toLocaleDateString()}
+          </Text>
+          <Pressable
+            accessibilityLabel="Delete consultation"
+            onPress={() => onDelete(item)}
+            className="ml-3 p-2"
+          >
+            <Feather name="trash-2" size={18} color={dangerColor} />
+          </Pressable>
+        </View>
+      </View>
+      <Text className="text-sm text-slate-700 dark:text-slate-200" numberOfLines={2}>
+        {item.remarks || "No remarks"}
+      </Text>
+      <Text className="text-xs text-slate-400 mt-2 dark:text-slate-500">
+        Photos: {item.photoCount}
+      </Text>
+    </Pressable>
+  );
+});
 
 export default function PatientDetailsScreen() {
   const router = useRouter();
@@ -51,9 +91,19 @@ export default function PatientDetailsScreen() {
   const [hasMore, setHasMore] = useState(true);
   const [editing, setEditing] = useState(false);
   const [profilePhotoUri, setProfilePhotoUri] = useState<string | undefined>();
-  const [profilePhotoDisplayUri, setProfilePhotoDisplayUri] = useState<
-    string | undefined
-  >();
+
+  // A revision-triggered reload must not clobber a form the user is mid-edit in.
+  const editingRef = useRef(editing);
+  useEffect(() => {
+    editingRef.current = editing;
+  }, [editing]);
+
+  // Render-safe preview: a freshly picked photo is file:// (passes through); the persisted
+  // SAF URI resolves via the fingerprinted cache, so `updatedAt` re-checks are metadata-only.
+  const profilePhotoDisplayUri = useResolvedImageUri(
+    profilePhotoUri,
+    patient?.updatedAt,
+  );
 
   const cursorRef = useRef<ConsultationCursor | undefined>(undefined);
   // No `emrNumber` here by design: the EMR is this patient's identity and is immutable.
@@ -71,28 +121,18 @@ export default function PatientDetailsScreen() {
       const patientData = await getPatient(patientId as string);
       if (patientData) {
         setPatient(patientData);
-        setProfilePhotoUri(patientData.profilePhotoUri);
 
-        // Resolve stored SAF/content URIs to a render-safe cache URI.
-        try {
-          const displayUri = await toRenderableImageUriAsync(
-            patientData.profilePhotoUri,
-          );
-          setProfilePhotoDisplayUri(
-            displayUri
-              ? withCacheBuster(displayUri, patientData.updatedAt)
-              : undefined,
-          );
-        } catch {
-          setProfilePhotoDisplayUri(undefined);
+        // Skip form/photo state while the user is editing: a consultation delete (which
+        // bumps the dataset revision) must not wipe their in-progress changes.
+        if (!editingRef.current) {
+          setProfilePhotoUri(patientData.profilePhotoUri);
+          setForm({
+            name: patientData.name,
+            age: patientData.age ? String(patientData.age) : "",
+            gender: patientData.gender ?? "unspecified",
+            phone: patientData.phone ?? "",
+          });
         }
-
-        setForm({
-          name: patientData.name,
-          age: patientData.age ? String(patientData.age) : "",
-          gender: patientData.gender ?? "unspecified",
-          phone: patientData.phone ?? "",
-        });
       }
 
       // Load first page of consultations from the SQLite index.
@@ -140,20 +180,6 @@ export default function PatientDetailsScreen() {
     }
   }, [hasMore, loading, loadingMore, patientId]);
 
-  const reloadConsultationsFirstPage = useCallback(async () => {
-    if (!patientId) return;
-
-    cursorRef.current = undefined;
-    const { items, nextCursor } =
-      await consultationIndexService.queryConsultationsPageAsync({
-        patientId: patientId as string,
-        limit: CONSULTATIONS_PAGE_SIZE,
-      });
-    setConsultations(items);
-    cursorRef.current = nextCursor;
-    setHasMore(Boolean(nextCursor));
-  }, [patientId]);
-
   const confirmDeleteConsultation = useCallback(
     (consultation: ConsultationIndexRow) => {
       if (!patientId) return;
@@ -168,8 +194,8 @@ export default function PatientDetailsScreen() {
             style: "destructive",
             onPress: async () => {
               try {
+                // The delete bumps the dataset revision, which reloads this screen.
                 await deleteConsultation(patientId as string, consultation.id);
-                await reloadConsultationsFirstPage();
               } catch (error) {
                 Alert.alert(
                   "Delete failed",
@@ -181,14 +207,11 @@ export default function PatientDetailsScreen() {
         ],
       );
     },
-    [patientId, reloadConsultationsFirstPage],
+    [patientId],
   );
 
-  useFocusEffect(
-    useCallback(() => {
-      loadData();
-    }, [loadData]),
-  );
+  // Load on first focus; reload only when the dataset changed (saves, deletes, imports).
+  useDatasetFocusRefresh(loadData);
 
   const requestPhoto = async (fromCamera: boolean) => {
     const permission = fromCamera
@@ -214,22 +237,8 @@ export default function PatientDetailsScreen() {
         });
 
     if (!result.canceled && result.assets?.length) {
-      const pickedUri = result.assets[0].uri;
-      setProfilePhotoUri(pickedUri);
-
-      // For previews, normalize any `content://` URIs.
-      try {
-        const displayUri = await toRenderableImageUriAsync(pickedUri);
-        setProfilePhotoDisplayUri(
-          displayUri
-            ? withCacheBuster(displayUri, String(Date.now()))
-            : undefined,
-        );
-      } catch {
-        setProfilePhotoDisplayUri(
-          withCacheBuster(pickedUri, String(Date.now())),
-        );
-      }
+      // The preview hook resolves the picked URI (usually file://) automatically.
+      setProfilePhotoUri(result.assets[0].uri);
     }
   };
 
@@ -252,23 +261,10 @@ export default function PatientDetailsScreen() {
         profilePhotoUri,
       });
       setPatient(updated);
-      // Keep form state aligned with the persisted profile URI after save.
+      // Keep form state aligned with the persisted profile URI after save; the preview
+      // hook re-resolves it (new `updatedAt` version → fresh fingerprint if it changed).
       setProfilePhotoUri(updated.profilePhotoUri);
       setEditing(false);
-
-      // Persisted image URI may change (SAF content URI). Refresh preview.
-      try {
-        const displayUri = await toRenderableImageUriAsync(
-          updated.profilePhotoUri,
-        );
-        setProfilePhotoDisplayUri(
-          displayUri
-            ? withCacheBuster(displayUri, updated.updatedAt)
-            : undefined,
-        );
-      } catch {
-        setProfilePhotoDisplayUri(undefined);
-      }
     } catch (error) {
       Alert.alert(
         "Save failed",
@@ -277,37 +273,23 @@ export default function PatientDetailsScreen() {
     }
   };
 
-  const renderConsultation = ({ item }: { item: ConsultationIndexRow }) => (
-    <Pressable
-      onPress={() =>
-        router.push(`/patient/${patientId}/consultation/${item.id}`)
-      }
-      className="bg-white rounded-xl p-3 mb-3 shadow-sm dark:bg-slate-900"
-    >
-      <View className="flex-row items-center justify-between mb-1">
-        <Text className="text-base font-semibold text-slate-900 dark:text-slate-100">
-          Consultation #{item.number}
-        </Text>
-        <View className="flex-row items-center">
-          <Text className="text-xs text-slate-500 dark:text-slate-400">
-            {new Date(item.updatedAt).toLocaleDateString()}
-          </Text>
-          <Pressable
-            accessibilityLabel="Delete consultation"
-            onPress={() => confirmDeleteConsultation(item)}
-            className="ml-3 p-2"
-          >
-            <Feather name="trash-2" size={18} color={colors.danger} />
-          </Pressable>
-        </View>
-      </View>
-      <Text className="text-sm text-slate-700 dark:text-slate-200" numberOfLines={2}>
-        {item.remarks || "No remarks"}
-      </Text>
-      <Text className="text-xs text-slate-400 mt-2 dark:text-slate-500">
-        Photos: {item.photoCount}
-      </Text>
-    </Pressable>
+  const openConsultation = useCallback(
+    (item: ConsultationIndexRow) => {
+      router.push(`/patient/${patientId}/consultation/${item.id}`);
+    },
+    [patientId, router],
+  );
+
+  const renderConsultation = useCallback(
+    ({ item }: { item: ConsultationIndexRow }) => (
+      <ConsultationListItem
+        item={item}
+        onOpen={openConsultation}
+        onDelete={confirmDeleteConsultation}
+        dangerColor={colors.danger}
+      />
+    ),
+    [openConsultation, confirmDeleteConsultation, colors.danger],
   );
 
   if (loading) {

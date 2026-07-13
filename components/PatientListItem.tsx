@@ -1,10 +1,10 @@
 import { Feather } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { memo, useEffect, useState } from "react";
+import { memo } from "react";
 import { Pressable, Text, View } from "react-native";
 
+import { useResolvedImageUri } from "../hooks/useResolvedImageUri";
 import { useThemeColors } from "../hooks/useThemeColors";
-import { toRenderableImageUriAsync } from "../services/imageUri";
 import { formatEmrNumberForDisplay } from "../services/patient/emr";
 import type { Patient } from "../types/models";
 
@@ -14,11 +14,6 @@ type Props = {
   onDelete: (patient: Patient) => void;
 };
 
-const withCacheBuster = (uri: string, cacheKey: string) => {
-  const separator = uri.includes("?") ? "&" : "?";
-  return `${uri}${separator}v=${encodeURIComponent(cacheKey)}`;
-};
-
 // Memoized row component to minimize re-renders in large lists.
 export const PatientListItem = memo(function PatientListItem({
   patient,
@@ -26,28 +21,9 @@ export const PatientListItem = memo(function PatientListItem({
   onDelete,
 }: Props) {
   const colors = useThemeColors();
-  const [displayUri, setDisplayUri] = useState<string | undefined>();
-
-  useEffect(() => {
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        const uri = await toRenderableImageUriAsync(patient.profilePhotoUri);
-        if (!cancelled) {
-          setDisplayUri(
-            uri ? withCacheBuster(uri, patient.updatedAt) : undefined,
-          );
-        }
-      } catch {
-        if (!cancelled) setDisplayUri(undefined);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [patient.id, patient.profilePhotoUri, patient.updatedAt]);
+  // `updatedAt` as version: a replaced profile photo behind the same URI fingerprints to a
+  // new cache entry; an unchanged one is a metadata query with a stable result.
+  const displayUri = useResolvedImageUri(patient.profilePhotoUri, patient.updatedAt);
 
   return (
     <Pressable
@@ -57,6 +33,8 @@ export const PatientListItem = memo(function PatientListItem({
       {patient.profilePhotoUri && displayUri ? (
         <Image
           source={{ uri: displayUri }}
+          recyclingKey={patient.id}
+          cachePolicy="memory-disk"
           className="h-14 w-14 rounded-full mr-4"
           contentFit="cover"
         />

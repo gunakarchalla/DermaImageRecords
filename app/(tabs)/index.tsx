@@ -1,5 +1,5 @@
 import { Feather, MaterialIcons } from "@expo/vector-icons";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -18,8 +18,8 @@ import { FlashList } from "@shopify/flash-list";
 import { useColorScheme } from "nativewind";
 
 import { PatientListItem } from "../../components/PatientListItem";
+import { useDatasetFocusRefresh } from "../../hooks/useDatasetFocusRefresh";
 import { useThemeColors } from "../../hooks/useThemeColors";
-import { useDatasetRevision } from "../../services/datasetRevision";
 import { patientIndexService } from "../../services/indexing/patientIndexService";
 import { deletePatient } from "../../services/storage/storage";
 import type { Patient } from "../../types/models";
@@ -124,22 +124,19 @@ export default function HomeScreen() {
     sort.direction,
   ]);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadFirstPage();
-    }, [loadFirstPage]),
-  );
+  // Load on first focus and whenever the dataset changes (own deletes, imports, restores,
+  // edits made on pushed screens). Navigating back with nothing changed reloads nothing.
+  useDatasetFocusRefresh(loadFirstPage);
 
-  // An import or cloud restore can rewrite the dataset while this screen is focused, which
-  // useFocusEffect can't see. Reload when the revision moves, but not on the initial render —
-  // the focus effect above already covers that.
-  const datasetRevision = useDatasetRevision();
-  const seenRevision = useRef(datasetRevision);
+  // Search/sort changes reload explicitly (the refresh hook ignores `load` identity).
+  const isFirstQueryRender = useRef(true);
   useEffect(() => {
-    if (seenRevision.current === datasetRevision) return;
-    seenRevision.current = datasetRevision;
+    if (isFirstQueryRender.current) {
+      isFirstQueryRender.current = false;
+      return;
+    }
     void loadFirstPage();
-  }, [datasetRevision, loadFirstPage]);
+  }, [loadFirstPage]);
 
   const confirmDelete = useCallback(
     (patient: Patient) => {
@@ -153,8 +150,8 @@ export default function HomeScreen() {
             style: "destructive",
             onPress: async () => {
               try {
+                // The delete bumps the dataset revision, which reloads the list.
                 await deletePatient(patient.id);
-                await loadFirstPage();
               } catch (error) {
                 Alert.alert(
                   "Delete failed",
@@ -166,7 +163,7 @@ export default function HomeScreen() {
         ],
       );
     },
-    [loadFirstPage],
+    [],
   );
 
   const toggleDirection = () => {

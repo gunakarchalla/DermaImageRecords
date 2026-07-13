@@ -35,6 +35,7 @@ import {
   type FeatherName,
 } from "../../../../../components/ImmersiveControls";
 import { PhotoSlide } from "../../../../../components/PhotoSlide";
+import { mapWithConcurrency } from "../../../../../services/async";
 import { toRenderableImageUriAsync } from "../../../../../services/imageUri";
 import {
   getConsultation,
@@ -285,16 +286,16 @@ export default function ConsultationPhotosScreen() {
     setCropRect(fitCropRect(cropImageFrame, cropAspect));
   }, [cropAspect, cropImageFrame, isCropping]);
 
+  // Imperative (not useResolvedPhotoUris): crop/rotate rewrite a photo behind the same URI,
+  // and this re-resolve picks up the new content fingerprint immediately after an edit.
   const resolveDisplayUris = useCallback(async (uris: string[]) => {
-    const entries = await Promise.all(
-      uris.map(async (uri) => {
-        try {
-          return [uri, await toRenderableImageUriAsync(uri)] as const;
-        } catch {
-          return [uri, undefined] as const;
-        }
-      }),
-    );
+    const entries = await mapWithConcurrency(uris, 4, async (uri) => {
+      try {
+        return [uri, await toRenderableImageUriAsync(uri)] as const;
+      } catch {
+        return [uri, undefined] as const;
+      }
+    });
 
     setDisplayUris(Object.fromEntries(entries));
   }, []);
@@ -1025,6 +1026,8 @@ export default function ConsultationPhotosScreen() {
                       >
                         <Image
                           source={{ uri: displayUris[item] ?? item }}
+                          recyclingKey={item}
+                          cachePolicy="memory-disk"
                           style={{ flex: 1 }}
                           contentFit="cover"
                         />

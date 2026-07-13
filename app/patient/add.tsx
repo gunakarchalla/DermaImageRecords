@@ -2,7 +2,7 @@ import { Feather } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -14,8 +14,8 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { useResolvedImageUri } from "../../hooks/useResolvedImageUri";
 import { useThemeColors } from "../../hooks/useThemeColors";
-import { toRenderableImageUriAsync } from "../../services/imageUri";
 import {
   canonicalizeEmrNumber,
   emrDisplayMaxLength,
@@ -40,25 +40,8 @@ export default function AddPatientScreen() {
   const [gender, setGender] = useState<Gender>("unspecified");
   const [phone, setPhone] = useState("");
   const [profilePhotoUri, setProfilePhotoUri] = useState<string | undefined>();
-  const [profilePhotoDisplayUri, setProfilePhotoDisplayUri] = useState<
-    string | undefined
-  >();
+  const profilePhotoDisplayUri = useResolvedImageUri(profilePhotoUri);
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const displayUri = await toRenderableImageUriAsync(profilePhotoUri);
-        if (!cancelled) setProfilePhotoDisplayUri(displayUri);
-      } catch {
-        if (!cancelled) setProfilePhotoDisplayUri(undefined);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [profilePhotoUri]);
 
   const requestPhoto = async (fromCamera: boolean) => {
     const permission = fromCamera

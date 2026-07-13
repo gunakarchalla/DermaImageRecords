@@ -19,10 +19,10 @@ import {
   DictationStatus,
 } from "../../../../components/DictationButton";
 import { useDictation } from "../../../../hooks/useDictation";
+import { useResolvedPhotoUris } from "../../../../hooks/useResolvedImageUri";
 import { useThemeColors } from "../../../../hooks/useThemeColors";
 import { consumeConsultationCaptureQueue } from "../../../../services/consultationCaptureHandoff";
 import { appendTranscript } from "../../../../services/dictation/correctTranscript";
-import { toRenderableImageUriAsync } from "../../../../services/imageUri";
 import {
   getConsultation,
   saveConsultation,
@@ -38,9 +38,8 @@ export default function AddConsultationScreen() {
 
   const [remarks, setRemarks] = useState("");
   const [photos, setPhotos] = useState<string[]>([]);
-  const [photoPreviewUris, setPhotoPreviewUris] = useState<
-    Record<string, string | undefined>
-  >({});
+  // Render-safe previews for SAF/content:// URIs; `photos` stays the persisted source-of-truth.
+  const photoPreviewUris = useResolvedPhotoUris(photos);
   const [loading, setLoading] = useState(false);
   const [pickingImage, setPickingImage] = useState(false);
 
@@ -67,30 +66,6 @@ export default function AddConsultationScreen() {
   useEffect(() => {
     loadExisting();
   }, [loadExisting]);
-
-  useEffect(() => {
-    // Convert any non-renderable URIs (e.g., SAF/content://) to cache file:// URIs for previews.
-    // Keep `photos` unchanged because it is the persisted source-of-truth.
-    let cancelled = false;
-    void (async () => {
-      const entries = await Promise.all(
-        photos.map(async (uri) => {
-          try {
-            const previewUri = await toRenderableImageUriAsync(uri);
-            return [uri, previewUri] as const;
-          } catch {
-            return [uri, undefined] as const;
-          }
-        }),
-      );
-      if (cancelled) return;
-      setPhotoPreviewUris(Object.fromEntries(entries));
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [photos]);
 
   useFocusEffect(
     useCallback(() => {

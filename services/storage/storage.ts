@@ -10,6 +10,7 @@ import type {
     PatientUpdateInput,
 } from "../../types/models";
 import { folderStampFromCreatedAt } from "../consultation/consultationNumber";
+import { bumpDatasetRevision } from "../datasetRevision";
 import { consultationIndexService } from "../indexing/consultationIndexService";
 import { patientIndexService } from "../indexing/patientIndexService";
 import { EmrNumberTakenError, requireValidEmrNumber } from "../patient/emr";
@@ -90,6 +91,8 @@ export const deletePatient = async (patientId: string) => {
     // Always keep SQLite index in sync, even when the folder is already gone.
     await patientIndexService.deletePatientAsync(patientId);
     await consultationIndexService.deleteConsultationsByPatientAsync(patientId);
+
+    bumpDatasetRevision();
 };
 
 /**
@@ -144,6 +147,7 @@ export const createPatientAsync = async (input: PatientCreateInput): Promise<Pat
     await writeJsonToDir(dir, STORAGE.patientFileName, patient);
     await patientIndexService.upsertPatientAsync(patient);
 
+    bumpDatasetRevision();
     return patient;
 };
 
@@ -183,6 +187,7 @@ export const updatePatientAsync = async (patientId: string, input: PatientUpdate
     await writeJsonToDir(dir, STORAGE.patientFileName, patient);
     await patientIndexService.upsertPatientAsync(patient);
 
+    bumpDatasetRevision();
     return patient;
 };
 
@@ -217,6 +222,8 @@ export const deleteConsultation = async (patientId: string, consultationId: stri
         await writeJsonToDir(patientDir, STORAGE.patientFileName, patient);
         await patientIndexService.upsertPatientAsync(patient);
     }
+
+    bumpDatasetRevision();
 };
 
 /**
@@ -322,5 +329,6 @@ export const saveConsultation = async (
     // Update index.
     await consultationIndexService.upsertConsultationAsync(consultation);
 
+    bumpDatasetRevision();
     return consultation;
 };

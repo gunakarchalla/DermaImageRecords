@@ -1,13 +1,13 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * A counter bumped whenever the dataset is rewritten wholesale — a file import or a cloud
- * restore — rather than through the ordinary per-record save/delete paths.
+ * A counter bumped on every dataset mutation: per-record saves/deletes in
+ * services/storage/storage.ts as well as wholesale rewrites (file import, cloud restore).
  *
- * Screens reload their data on focus, which covers every mutation the user reaches by
- * navigating. A restore offered right after sign-in does not fit that shape: it finishes while
- * the patient list is already mounted and focused, so nothing would tell it to re-query and the
- * user would stare at an empty list until they switched tabs. Subscribing to this revision does.
+ * Screens subscribe via useDatasetFocusRefresh and re-query only when this changed since
+ * their last load — navigating back to an unchanged screen costs nothing. A bump while a
+ * screen is focused (its own mutation, or an import finishing behind it) refreshes it
+ * immediately.
  */
 
 let revision = 0;

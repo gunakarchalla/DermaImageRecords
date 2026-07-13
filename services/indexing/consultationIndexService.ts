@@ -90,6 +90,14 @@ export const consultationIndexService = {
         const missingIds = consultationIds.filter((id) => !getExistingConsultationDir(patientId, id));
         if (missingIds.length === 0) return;
 
+        // Guard against transient SAF listing failures (folder checks return null on errors
+        // too): when *everything* looks missing, only prune if the consultations root is
+        // actually reachable — otherwise a provider hiccup would wipe valid index rows.
+        if (missingIds.length === consultationIds.length) {
+            const consultationsRoot = await getExistingConsultationsRootDirForPatientAsync(patientId);
+            if (!consultationsRoot?.exists) return;
+        }
+
         for (const id of missingIds) {
             await dermaDb.deleteConsultationAsync(patientId, id);
         }

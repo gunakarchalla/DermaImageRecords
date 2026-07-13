@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
@@ -11,8 +11,9 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { useDatasetFocusRefresh } from "../../../../hooks/useDatasetFocusRefresh";
+import { useResolvedPhotoUris } from "../../../../hooks/useResolvedImageUri";
 import { useThemeColors } from "../../../../hooks/useThemeColors";
-import { toRenderableImageUriAsync } from "../../../../services/imageUri";
 import { consultationIndexService } from "../../../../services/indexing/consultationIndexService";
 import { getConsultation } from "../../../../services/storage/storage";
 import { Consultation } from "../../../../types/models";
@@ -28,10 +29,10 @@ export default function ViewConsultationScreen() {
   const [consultation, setConsultation] = useState<Consultation | null>(null);
   // Derived display ordinal (position over createdAt); the stored consultation has no number.
   const [number, setNumber] = useState<number | null>(null);
-  const [photoDisplayUris, setPhotoDisplayUris] = useState<
-    Record<string, string | undefined>
-  >({});
   const [loading, setLoading] = useState(true);
+
+  // Resolve persisted SAF/content URIs to cache file:// URIs for rendering.
+  const photoDisplayUris = useResolvedPhotoUris(consultation?.photoUris ?? []);
 
   const load = useCallback(async () => {
     if (!patientId || !consultationId) return;
@@ -39,32 +40,11 @@ export default function ViewConsultationScreen() {
     const data = await getConsultation(patientId, consultationId);
     setConsultation(data);
     setNumber(await consultationIndexService.getConsultationNumberAsync(patientId, consultationId));
-
-    // Resolve persisted SAF/content URIs to cache file:// URIs for rendering.
-    if (data?.photoUris?.length) {
-      const entries = await Promise.all(
-        data.photoUris.map(async (uri) => {
-          try {
-            const displayUri = await toRenderableImageUriAsync(uri);
-            return [uri, displayUri] as const;
-          } catch {
-            return [uri, undefined] as const;
-          }
-        }),
-      );
-      setPhotoDisplayUris(Object.fromEntries(entries));
-    } else {
-      setPhotoDisplayUris({});
-    }
-
     setLoading(false);
   }, [patientId, consultationId]);
 
-  useFocusEffect(
-    useCallback(() => {
-      load();
-    }, [load]),
-  );
+  // Re-query only when the dataset changed (e.g. returning from an edit), not on every focus.
+  useDatasetFocusRefresh(load);
 
   if (loading) {
     return (

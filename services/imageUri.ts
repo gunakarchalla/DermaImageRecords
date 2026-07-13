@@ -6,13 +6,21 @@ import { STORAGE } from "../constants/storage";
  * Some providers (notably SAF `content://` document URIs) don't reliably render in all
  * image components on Android. We keep SAF/content URIs as the persisted source-of-truth,
  * but convert them to a local cache `file://` URI for rendering.
+ *
+ * Cache filenames are fingerprinted with the source's size + modification time, so:
+ * - an unchanged source resolves to an existing cache file with **no byte copy** — the
+ *   only cost is one metadata query against the provider;
+ * - a mutated source (e.g. a replaced profile photo behind the same URI) fingerprints to a
+ *   new name, which also gives expo-image a fresh URI to cache — no cache-buster params.
  */
 
 const IMAGE_CACHE_DIR = new Directory(Paths.cache, STORAGE.imageCacheFolderName);
 
+/** Callers resolving the same cache entry concurrently share one copy operation. */
+const inFlight = new Map<string, Promise<string>>();
+
 const ensureCacheDir = async () => {
-    // Create directory tree if missing.
-    // Using `idempotent: true` makes repeated calls safe.
+    // `idempotent: true` makes repeated calls safe.
     await IMAGE_CACHE_DIR.create({ intermediates: true, idempotent: true });
 };
 
@@ -26,38 +34,60 @@ const djb2Hash = (input: string) => {
     return (hash >>> 0).toString(36);
 };
 
-const findChildFile = (parent: Directory, name: string): File | null => {
+const guessMimeType = (uri: string): { ext: string } => {
+    const lowered = uri.toLowerCase();
+    if (lowered.includes(".png")) return { ext: "png" };
+    if (lowered.includes(".webp")) return { ext: "webp" };
+    // Default to jpeg: the historical format, and still the default image setting.
+    return { ext: "jpg" };
+};
+
+/**
+ * Best-effort removal of cache entries for older fingerprints of the same source, so a
+ * mutated source doesn't strand its previous copies until the next full cache wipe.
+ */
+const deleteStaleVersions = (uriHash: string, keepName: string) => {
     try {
-        if (!parent.exists) return null;
-        const entry = parent.list().find((item) => item instanceof File && item.name === name);
-        return (entry as File | undefined) ?? null;
+        for (const entry of IMAGE_CACHE_DIR.list()) {
+            if (entry instanceof File && entry.name !== keepName && entry.name.startsWith(`${uriHash}-`)) {
+                try {
+                    entry.delete();
+                } catch {
+                    // Ignore: another caller may still be reading it; it gets swept later.
+                }
+            }
+        }
     } catch {
-        return null;
+        // Listing failures are non-fatal; stale entries are harmless.
     }
 };
 
-const createOrGetCacheFileAsync = async (name: string, mimeType: string) => {
+const copyIntoCacheAsync = async (uri: string, uriHash: string, cacheName: string): Promise<string> => {
     await ensureCacheDir();
 
-    const existing = findChildFile(IMAGE_CACHE_DIR, name);
-    if (existing?.exists) return existing;
+    const destination = new File(IMAGE_CACHE_DIR, cacheName);
+    if (destination.exists && destination.size > 0) return destination.uri;
 
+    // Write to a temp name, then move into place, so a concurrent reader can never observe
+    // a half-written cache file.
+    const temp = new File(IMAGE_CACHE_DIR, `${cacheName}.tmp-${Math.random().toString(36).slice(2, 8)}`);
     try {
-        return await IMAGE_CACHE_DIR.createFile(name, mimeType);
-    } catch {
-        // Race: if another call created it, return the existing one.
-        const after = findChildFile(IMAGE_CACHE_DIR, name);
-        if (after) return after;
-        throw new Error("Failed to create cached image file.");
+        const bytes = await new File(uri).bytes();
+        temp.write(bytes);
+        temp.move(destination);
+    } catch (error) {
+        try {
+            if (temp.exists) temp.delete();
+        } catch {
+            // Leftover temp files are cleaned with the cache.
+        }
+        // Lost a race against another writer? The winner's file serves fine.
+        if (destination.exists && destination.size > 0) return destination.uri;
+        throw error;
     }
-};
 
-const guessMimeType = (uri: string): { ext: string; mimeType: string } => {
-    const lowered = uri.toLowerCase();
-    if (lowered.includes(".png")) return { ext: "png", mimeType: "image/png" };
-    if (lowered.includes(".webp")) return { ext: "webp", mimeType: "image/webp" };
-    // Default to jpeg: the historical format, and still the default image setting.
-    return { ext: "jpg", mimeType: "image/jpeg" };
+    deleteStaleVersions(uriHash, cacheName);
+    return destination.uri;
 };
 
 /**
@@ -78,20 +108,23 @@ export const toRenderableImageUriAsync = async (uri?: string | null): Promise<st
         return uri;
     }
 
-    const { ext, mimeType } = guessMimeType(uri);
-    const fileName = `${djb2Hash(uri)}.${ext}`;
-
-    // Copy bytes from the original URI into cache.
-    const destination = await createOrGetCacheFileAsync(fileName, mimeType);
-
-    // If the destination exists but is empty/corrupt, overwrite it.
-    // We can't reliably check size, so we do a best-effort write each time for non-file URIs.
-    // This keeps behavior predictable after providers revoke/restore access.
+    // Metadata-only provider query; no bytes are read here.
     const source = new File(uri);
-    const bytes = await source.bytes();
-    await destination.write(bytes);
+    const fingerprint = `${source.size}-${source.modificationTime ?? 0}`;
+    const uriHash = djb2Hash(uri);
+    const cacheName = `${uriHash}-${fingerprint}.${guessMimeType(uri).ext}`;
 
-    return destination.uri;
+    const existing = new File(IMAGE_CACHE_DIR, cacheName);
+    if (existing.exists && existing.size > 0) return existing.uri;
+
+    const pending = inFlight.get(cacheName);
+    if (pending) return pending;
+
+    const task = copyIntoCacheAsync(uri, uriHash, cacheName).finally(() => {
+        inFlight.delete(cacheName);
+    });
+    inFlight.set(cacheName, task);
+    return task;
 };
 
 /**

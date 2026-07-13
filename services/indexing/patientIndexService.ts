@@ -94,6 +94,15 @@ export const patientIndexService = {
         const missingIds = patientIds.filter((id) => !getExistingPatientDir(id));
         if (missingIds.length === 0) return;
 
+        // Every row "missing" at once smells like a transient SAF provider failure, not a
+        // real deletion — folder checks return null on listing errors too. Only prune en
+        // masse when the patients root itself is reachable, so a hiccup can't wipe valid
+        // index rows (and their reindex stamps) for data that is still on disk.
+        if (missingIds.length === patientIds.length) {
+            const patientsRoot = await getPatientsRootDirectoryAsync();
+            if (!patientsRoot.exists) return;
+        }
+
         for (const id of missingIds) {
             await dermaDb.deletePatientAsync(id);
             await dermaDb.deleteMetaByPrefixAsync(`consultations.patient.${id}.`);

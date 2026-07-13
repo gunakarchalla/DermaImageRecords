@@ -40,6 +40,7 @@ import {
 } from "../../../../components/ImmersiveControls";
 import { enqueueConsultationCapture } from "../../../../services/consultationCaptureHandoff";
 import type { ConsultationCursor } from "../../../../services/db/dermaDb";
+import { mapWithConcurrency } from "../../../../services/async";
 import { toRenderableImageUriAsync } from "../../../../services/imageUri";
 import { consultationIndexService } from "../../../../services/indexing/consultationIndexService";
 import { getConsultation } from "../../../../services/storage";
@@ -261,15 +262,14 @@ export default function ConsultationCameraScreen() {
         } while (cursor && uris.length < MAX_GHOST_PHOTOS);
 
         const capped = uris.slice(0, MAX_GHOST_PHOTOS);
-        const entries = await Promise.all(
-          capped.map(async (uri) => {
-            try {
-              return [uri, await toRenderableImageUriAsync(uri)] as const;
-            } catch {
-              return [uri, undefined] as const;
-            }
-          }),
-        );
+        // Bounded fan-out: first visit can copy up to 24 full images into the render cache.
+        const entries = await mapWithConcurrency(capped, 4, async (uri) => {
+          try {
+            return [uri, await toRenderableImageUriAsync(uri)] as const;
+          } catch {
+            return [uri, undefined] as const;
+          }
+        });
 
         if (cancelled) return;
         setGhostUris(capped);
