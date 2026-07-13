@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { GenderPicker } from "../../components/ui/GenderPicker";
 import { useResolvedImageUri } from "../../hooks/useResolvedImageUri";
 import { useThemeColors } from "../../hooks/useThemeColors";
 import {
@@ -175,7 +176,7 @@ export default function AddPatientScreen() {
 
         {/* The EMR identifies the patient everywhere (folder, route, index) and is fixed once
             saved, so it leads the form. Border/error colours are inline `style` rather than
-            toggled classes — see the note in app/(tabs)/import-export.tsx. */}
+            toggled classes — see the note in app/(drawer)/backup-sync.tsx. */}
         <View className="mb-4">
           <Text className="text-sm text-slate-600 mb-1 dark:text-slate-400">
             EMR Number
@@ -258,36 +259,7 @@ export default function AddPatientScreen() {
 
         <View className="mb-6">
           <Text className="text-sm text-slate-600 mb-2 dark:text-slate-400">Gender</Text>
-          <View className="flex-row flex-wrap">
-            {(
-              [
-                { label: "Unspecified", value: "unspecified" },
-                { label: "Male", value: "male" },
-                { label: "Female", value: "female" },
-                { label: "Other", value: "other" },
-              ] as { label: string; value: Gender }[]
-            ).map((option) => (
-              <Pressable
-                key={option.value}
-                onPress={() => setGender(option.value)}
-                className={`px-4 py-2 mr-2 mb-2 rounded-full border ${
-                  gender === option.value
-                    ? "bg-slate-900 border-slate-900 dark:bg-slate-100 dark:border-slate-100"
-                    : "border-slate-200 dark:border-slate-700"
-                }`}
-              >
-                <Text
-                  className={`text-sm font-semibold ${
-                    gender === option.value
-                      ? "text-white dark:text-slate-900"
-                      : "text-slate-800 dark:text-slate-200"
-                  }`}
-                >
-                  {option.label}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+          <GenderPicker value={gender} onChange={setGender} />
         </View>
 
         <Pressable

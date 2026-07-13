@@ -1,5 +1,4 @@
 import { Feather } from "@expo/vector-icons";
-import Slider from "@react-native-community/slider";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
@@ -16,7 +15,6 @@ import {
   BackHandler,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -38,21 +36,18 @@ import {
   OverlayPill,
   RuleOfThirdsGrid,
 } from "../../../../components/ImmersiveControls";
+import { GhostOpacityBar, GhostTray } from "../../../../features/camera/GhostTray";
+import { PendingTray } from "../../../../features/camera/PendingTray";
+import {
+  DEFAULT_PREVIEW_ASPECT,
+  pickLargestSensorFormat,
+} from "../../../../features/camera/sensorFormat";
+import { useGhostPhotos } from "../../../../features/camera/useGhostPhotos";
 import { enqueueConsultationCapture } from "../../../../services/consultationCaptureHandoff";
-import type { ConsultationCursor } from "../../../../services/db/dermaDb";
-import { mapWithConcurrency } from "../../../../services/async";
-import { toRenderableImageUriAsync } from "../../../../services/imageUri";
-import { consultationIndexService } from "../../../../services/indexing/consultationIndexService";
-import { getConsultation } from "../../../../services/storage";
 
 const MIN_CAMERA_READY_DELAY_MS = 350;
 const CAPTURE_RETRY_DELAY_MS = 220;
 const CAPTURE_ATTEMPTS = 2;
-
-// The ghost tray is a horizontal strip, so there is no point pulling the
-// patient's entire photo history into memory to fill it.
-const MAX_GHOST_PHOTOS = 24;
-const GHOST_PAGE_SIZE = 20;
 
 const DEFAULT_GHOST_OPACITY = 0.35;
 // Pinch travel is damped so a full two-finger spread doesn't slam to max zoom.
@@ -60,81 +55,6 @@ const PINCH_ZOOM_SENSITIVITY = 0.4;
 // Quantize zoom before it reaches React state; a raw pinch stream would
 // re-render the tree on every frame for changes the camera can't resolve.
 const ZOOM_STEPS = 50;
-
-// Portrait width / height. Nearly every phone sensor is 4:3, and iOS only ever
-// hands back 4:3 stills from the wide lens, so this is the fallback when the
-// device won't tell us its picture sizes.
-const DEFAULT_PREVIEW_ASPECT = 3 / 4;
-
-// Android reports picture sizes as "<width>x<height>" in landscape orientation.
-const PICTURE_SIZE_PATTERN = /^(\d+)x(\d+)$/;
-
-type SensorFormat = { pictureSize: string; previewAspect: number };
-
-/**
- * Pick the largest picture the sensor offers and derive the portrait aspect ratio
- * of the frame it produces.
- *
- * This is what keeps the viewfinder honest. The preview's scaleType is FILL, so
- * the camera feed gets centre-cropped to whatever bounds the CameraView is given
- * — but `takePictureAsync` always reads the full sensor frame. Laying the preview
- * out at exactly this aspect ratio makes FILL and FIT identical, so what is framed
- * is what is saved. (`ratio` would force FIT, but it is Android-only and is
- * ignored once `pictureSize` is set.)
- */
-const pickLargestSensorFormat = (sizes: string[]): SensorFormat | null => {
-  let best: (SensorFormat & { area: number }) | null = null;
-
-  for (const size of sizes) {
-    const match = PICTURE_SIZE_PATTERN.exec(size);
-    if (!match) continue; // iOS returns preset names ("Photo", "High"), not dimensions.
-
-    const width = Number(match[1]);
-    const height = Number(match[2]);
-    if (!width || !height) continue;
-
-    const area = width * height;
-    if (best && area <= best.area) continue;
-
-    const shortSide = Math.min(width, height);
-    const longSide = Math.max(width, height);
-    best = { pictureSize: size, previewAspect: shortSide / longSide, area };
-  }
-
-  return best ? { pictureSize: best.pictureSize, previewAspect: best.previewAspect } : null;
-};
-
-/** Live opacity control for the ghost overlay. Rendered in the tray, or on its own once the tray closes. */
-function GhostOpacityBar({
-  value,
-  onChange,
-}: {
-  value: number;
-  onChange: (next: number) => void;
-}) {
-  return (
-    <View className="px-4 pb-2 pt-1">
-      <View className="mb-1 flex-row items-center justify-between">
-        <Text className="text-xs font-medium" style={{ color: IMMERSIVE.icon }}>
-          Ghost opacity
-        </Text>
-        <Text className="text-xs" style={{ color: IMMERSIVE.label }}>
-          {Math.round(value * 100)}%
-        </Text>
-      </View>
-      <Slider
-        minimumValue={0}
-        maximumValue={1}
-        value={value}
-        step={0.01}
-        onValueChange={onChange}
-        minimumTrackTintColor="#e2e8f0"
-        maximumTrackTintColor="#334155"
-        thumbTintColor="#e2e8f0"
-      />
-    </View>
-  );
-}
 
 export default function ConsultationCameraScreen() {
   const router = useRouter();
@@ -170,12 +90,8 @@ export default function ConsultationCameraScreen() {
   const [ghostTrayOpen, setGhostTrayOpen] = useState(false);
   const [ghostUri, setGhostUri] = useState<string | null>(null);
   const [ghostOpacity, setGhostOpacity] = useState(DEFAULT_GHOST_OPACITY);
-  const [ghostUris, setGhostUris] = useState<string[]>([]);
-  const [ghostPreviews, setGhostPreviews] = useState<
-    Record<string, string | undefined>
-  >({});
-  const [loadingGhosts, setLoadingGhosts] = useState(false);
-  const [ghostsFailed, setGhostsFailed] = useState(false);
+  const { ghostUris, ghostPreviews, loadingGhosts, ghostsFailed } =
+    useGhostPhotos(patientId);
 
   const shutterScale = useSharedValue(1);
   const flashOpacity = useSharedValue(0);
@@ -226,65 +142,6 @@ export default function ConsultationCameraScreen() {
     if (!cameraReady || sensorResolved || Platform.OS !== "android") return;
     void resolveSensorFormat();
   }, [cameraReady, resolveSensorFormat, sensorResolved]);
-
-  const ghostsRequestedRef = useRef(false);
-
-  useEffect(() => {
-    if (!patientId || ghostsRequestedRef.current) return;
-    ghostsRequestedRef.current = true;
-
-    let cancelled = false;
-    void (async () => {
-      setLoadingGhosts(true);
-      try {
-        const uris: string[] = [];
-        let cursor: ConsultationCursor | undefined;
-
-        do {
-          const { items, nextCursor } =
-            await consultationIndexService.queryConsultationsPageAsync({
-              patientId,
-              limit: GHOST_PAGE_SIZE,
-              cursor,
-            });
-
-          const consultations = await Promise.all(
-            items.map((item) => getConsultation(patientId, item.id)),
-          );
-
-          consultations.forEach((consultation) => {
-            consultation?.photoUris.forEach((uri) => {
-              if (!uris.includes(uri)) uris.push(uri);
-            });
-          });
-
-          cursor = nextCursor;
-        } while (cursor && uris.length < MAX_GHOST_PHOTOS);
-
-        const capped = uris.slice(0, MAX_GHOST_PHOTOS);
-        // Bounded fan-out: first visit can copy up to 24 full images into the render cache.
-        const entries = await mapWithConcurrency(capped, 4, async (uri) => {
-          try {
-            return [uri, await toRenderableImageUriAsync(uri)] as const;
-          } catch {
-            return [uri, undefined] as const;
-          }
-        });
-
-        if (cancelled) return;
-        setGhostUris(capped);
-        setGhostPreviews(Object.fromEntries(entries));
-      } catch {
-        if (!cancelled) setGhostsFailed(true);
-      } finally {
-        if (!cancelled) setLoadingGhosts(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [patientId]);
 
   const flushAndClose = useCallback(() => {
     if (patientId) {
@@ -684,130 +541,26 @@ export default function ConsultationCameraScreen() {
         ) : null}
 
         {ghostTrayOpen ? (
-          <View className="pt-2">
-            <View className="mb-3 flex-row items-center justify-between px-4">
-              <View className="flex-1 pr-3">
-                <Text className="text-sm font-semibold text-slate-100">
-                  Align to a previous photo
-                </Text>
-                <Text className="text-xs" style={{ color: IMMERSIVE.label }}>
-                  Overlay an earlier photo to reproduce the same framing.
-                </Text>
-              </View>
-              <OverlayIconButton
-                icon="chevron-down"
-                accessibilityLabel="Close align tray"
-                onPress={() => setGhostTrayOpen(false)}
-              />
-            </View>
-
-            {loadingGhosts ? (
-              <View className="px-4 py-6">
-                <ActivityIndicator color={IMMERSIVE.icon} />
-              </View>
-            ) : ghostsFailed ? (
-              <Text className="px-4 pb-4 text-sm" style={{ color: IMMERSIVE.label }}>
-                Could not load previous consultation photos.
-              </Text>
-            ) : ghostUris.length === 0 ? (
-              <Text className="px-4 pb-4 text-sm" style={{ color: IMMERSIVE.label }}>
-                No earlier photos for this patient yet.
-              </Text>
-            ) : (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ paddingHorizontal: 16, gap: 10 }}
-              >
-                <Pressable
-                  onPress={() => setGhostUri(null)}
-                  accessibilityLabel="No overlay"
-                  accessibilityState={{ selected: !ghostUri }}
-                  className="h-16 w-16 items-center justify-center rounded-2xl"
-                  style={{
-                    borderWidth: 2,
-                    borderColor: ghostUri ? IMMERSIVE.controlBorder : IMMERSIVE.active,
-                    backgroundColor: IMMERSIVE.control,
-                  }}
-                >
-                  <Feather
-                    name="slash"
-                    size={16}
-                    color={ghostUri ? IMMERSIVE.label : IMMERSIVE.active}
-                  />
-                  <Text
-                    className="mt-0.5 text-xs font-medium"
-                    style={{ color: ghostUri ? IMMERSIVE.label : IMMERSIVE.active }}
-                  >
-                    None
-                  </Text>
-                </Pressable>
-
-                {ghostUris.map((uri) => {
-                  const selected = ghostUri === uri;
-                  return (
-                    <Pressable
-                      key={uri}
-                      onPress={() => {
-                        setGhostUri(uri);
-                        setGhostOpacity(DEFAULT_GHOST_OPACITY);
-                      }}
-                      accessibilityLabel="Use this photo as an overlay"
-                      accessibilityState={{ selected }}
-                      className="h-16 w-16 overflow-hidden rounded-2xl"
-                      style={{
-                        borderWidth: 2,
-                        borderColor: selected ? IMMERSIVE.active : "transparent",
-                      }}
-                    >
-                      <Image
-                        source={{ uri: ghostPreviews[uri] ?? uri }}
-                        style={{ flex: 1 }}
-                        contentFit="cover"
-                      />
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
-            )}
-
-            {ghostUri ? (
-              <GhostOpacityBar value={ghostOpacity} onChange={setGhostOpacity} />
-            ) : null}
-          </View>
+          <GhostTray
+            ghostUris={ghostUris}
+            ghostPreviews={ghostPreviews}
+            loading={loadingGhosts}
+            failed={ghostsFailed}
+            selectedUri={ghostUri}
+            opacity={ghostOpacity}
+            onSelect={(uri) => {
+              setGhostUri(uri);
+              if (uri) setGhostOpacity(DEFAULT_GHOST_OPACITY);
+            }}
+            onOpacityChange={setGhostOpacity}
+            onClose={() => setGhostTrayOpen(false)}
+          />
         ) : ghostUri ? (
           <GhostOpacityBar value={ghostOpacity} onChange={setGhostOpacity} />
         ) : null}
 
         {pending.length > 0 ? (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{
-              paddingHorizontal: 16,
-              paddingVertical: 10,
-              gap: 10,
-            }}
-          >
-            {pending.map((uri) => (
-              <View key={uri}>
-                <Image
-                  source={{ uri }}
-                  style={{ width: 56, height: 56, borderRadius: 12 }}
-                  contentFit="cover"
-                />
-                <Pressable
-                  onPress={() => removePending(uri)}
-                  accessibilityLabel="Remove captured photo"
-                  hitSlop={8}
-                  className="absolute -right-1.5 -top-1.5 items-center justify-center rounded-full"
-                  style={{ width: 22, height: 22, backgroundColor: IMMERSIVE.active }}
-                >
-                  <Feather name="x" size={12} color={IMMERSIVE.onActive} />
-                </Pressable>
-              </View>
-            ))}
-          </ScrollView>
+          <PendingTray uris={pending} onRemove={removePending} />
         ) : null}
 
         <View

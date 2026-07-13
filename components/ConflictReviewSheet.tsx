@@ -8,7 +8,7 @@ import { formatEmrNumberForDisplay } from "../services/patient/emr";
 // Active/inactive styling is applied via inline `style`, not by toggling Tailwind classes —
 // dynamically adding/removing a shadow or interaction class on a css-interop component after its
 // first render trips its "View → Pressable" upgrade path and crashes serializing props. See the
-// note in app/(tabs)/import-export.tsx. Only the non-changing `text-*` classes stay on className
+// note in app/(drawer)/backup-sync.tsx. Only the non-changing `text-*` classes stay on className
 // so global font scaling still applies.
 
 type ConflictReviewSheetProps = {

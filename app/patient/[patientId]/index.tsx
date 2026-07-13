@@ -16,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { FlashList } from "@shopify/flash-list";
 import { useColorScheme } from "nativewind";
 
+import { GenderPicker } from "../../../components/ui/GenderPicker";
 import { useDatasetFocusRefresh } from "../../../hooks/useDatasetFocusRefresh";
 import { useResolvedImageUri } from "../../../hooks/useResolvedImageUri";
 import { useThemeColors } from "../../../hooks/useThemeColors";
@@ -404,38 +405,10 @@ export default function PatientDetailsScreen() {
 
             <View className="mb-4">
               <Text className="text-sm text-slate-600 mb-2 dark:text-slate-400">Gender</Text>
-              <View className="flex-row flex-wrap">
-                {(
-                  [
-                    { label: "Unspecified", value: "unspecified" },
-                    { label: "Male", value: "male" },
-                    { label: "Female", value: "female" },
-                    { label: "Other", value: "other" },
-                  ] as { label: string; value: Gender }[]
-                ).map((option) => (
-                  <Pressable
-                    key={option.value}
-                    onPress={() =>
-                      setForm((prev) => ({ ...prev, gender: option.value }))
-                    }
-                    className={`px-4 py-2 mr-2 mb-2 rounded-full border ${
-                      form.gender === option.value
-                        ? "bg-slate-900 border-slate-900 dark:bg-slate-100 dark:border-slate-100"
-                        : "border-slate-200 dark:border-slate-700"
-                    }`}
-                  >
-                    <Text
-                      className={`text-sm font-semibold ${
-                        form.gender === option.value
-                          ? "text-white dark:text-slate-900"
-                          : "text-slate-800 dark:text-slate-200"
-                      }`}
-                    >
-                      {option.label}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
+              <GenderPicker
+                value={form.gender}
+                onChange={(gender) => setForm((prev) => ({ ...prev, gender }))}
+              />
             </View>
 
             <View className="flex-row mb-4">

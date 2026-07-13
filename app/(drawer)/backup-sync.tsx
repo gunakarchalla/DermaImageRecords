@@ -1,7 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import Slider from "@react-native-community/slider";
 import { useColorScheme } from "nativewind";
-import type { ComponentProps, ReactNode } from "react";
 import { useCallback, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -14,6 +13,9 @@ import {
   type BackupPeriodKey,
 } from "../../constants/backup";
 import { ConflictReviewSheet } from "../../components/ConflictReviewSheet";
+import { ChipRow, type ChipOption } from "../../components/ui/ChipRow";
+import { Section } from "../../components/ui/Section";
+import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { useThemeColors } from "../../hooks/useThemeColors";
 import { useBackup } from "../../services/backup/BackupProvider";
 import {
@@ -30,36 +32,6 @@ import {
   pickAndReadArchiveAsync,
 } from "../../services/backup/backupService";
 import type { BackupManifest } from "../../services/backup/manifest";
-
-type FeatherName = ComponentProps<typeof Feather>["name"];
-
-function Section({
-  icon,
-  title,
-  subtitle,
-  children,
-}: {
-  icon: FeatherName;
-  title: string;
-  subtitle: string;
-  children: ReactNode;
-}) {
-  const colors = useThemeColors();
-  return (
-    <View className="mb-5">
-      <View className="mb-2 flex-row items-center">
-        <Feather name={icon} size={16} color={colors.icon} />
-        <Text className="ml-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-          {title}
-        </Text>
-      </View>
-      <View className="rounded-xl bg-white p-4 shadow-sm dark:bg-slate-900">
-        <Text className="text-sm text-slate-500 dark:text-slate-400">{subtitle}</Text>
-        <View className="mt-3">{children}</View>
-      </View>
-    </View>
-  );
-}
 
 const summaryLines = (summary: ImportSummary): string[] => {
   const lines: string[] = [];
@@ -126,117 +98,13 @@ const formatNextRetry = (ts: number | null): string | null => {
   return `Will retry automatically around ${time}.`;
 };
 
-// The active/inactive styling below is applied via inline `style`, not by toggling
-// Tailwind classes. Dynamically adding/removing a shadow or interaction class on a
-// css-interop component after its first render trips its "View → Pressable" upgrade
-// path, which then crashes serializing props. Keeping `className` static (only the
-// non-changing `text-*` classes remain, so global font scaling still applies) avoids
-// that entirely. Palette values mirror the hardcoded slate theme (see useThemeColors).
-
-/** Segmented Off / Manual / Automatic selector. */
-function ModeSelector({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: BackupMode;
-  onChange: (mode: BackupMode) => void;
-  disabled: boolean;
-}) {
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === "dark";
-  const trackBg = isDark ? "#1e293b" : "#f1f5f9"; // slate-800 / slate-100
-  const activeBg = isDark ? "#475569" : "#ffffff"; // slate-600 / white
-  const activeText = isDark ? "#f1f5f9" : "#0f172a"; // slate-100 / slate-900
-  const inactiveText = isDark ? "#94a3b8" : "#64748b"; // slate-400 / slate-500
-
-  return (
-    <View
-      style={{
-        flexDirection: "row",
-        borderRadius: 8,
-        padding: 4,
-        backgroundColor: trackBg,
-        opacity: disabled ? 0.5 : 1,
-      }}
-    >
-      {MODE_OPTIONS.map((option) => {
-        const active = option.value === value;
-        return (
-          <Pressable
-            key={option.value}
-            onPress={() => onChange(option.value)}
-            disabled={disabled}
-            style={{
-              flex: 1,
-              alignItems: "center",
-              borderRadius: 6,
-              paddingVertical: 8,
-              backgroundColor: active ? activeBg : "transparent",
-            }}
-          >
-            <Text className="text-sm font-semibold" style={{ color: active ? activeText : inactiveText }}>
-              {option.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
 /** Period preset chips (Daily / Weekly / Monthly / Custom). */
-function PeriodChips({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: BackupPeriodKey;
-  onChange: (key: BackupPeriodKey) => void;
-  disabled: boolean;
-}) {
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === "dark";
-  const activeBg = isDark ? "#f1f5f9" : "#0f172a"; // slate-100 / slate-900
-  const activeText = isDark ? "#0f172a" : "#ffffff";
-  const inactiveBorder = isDark ? "#334155" : "#cbd5e1"; // slate-700 / slate-300
-  const inactiveBg = isDark ? "#1e293b" : "#ffffff"; // slate-800 / white
-  const inactiveText = isDark ? "#e2e8f0" : "#334155"; // slate-200 / slate-700
+const PERIOD_OPTIONS: readonly ChipOption<BackupPeriodKey>[] = [
+  ...BACKUP_PERIOD_PRESETS.map((preset) => ({ value: preset.key, label: preset.label })),
+  { value: "custom", label: "Custom" },
+];
 
-  const chips: { key: BackupPeriodKey; label: string }[] = [
-    ...BACKUP_PERIOD_PRESETS.map((preset) => ({ key: preset.key, label: preset.label })),
-    { key: "custom", label: "Custom" },
-  ];
-
-  return (
-    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, opacity: disabled ? 0.5 : 1 }}>
-      {chips.map((chip) => {
-        const active = chip.key === value;
-        return (
-          <Pressable
-            key={chip.key}
-            onPress={() => onChange(chip.key)}
-            disabled={disabled}
-            style={{
-              borderRadius: 999,
-              borderWidth: 1,
-              paddingHorizontal: 16,
-              paddingVertical: 8,
-              borderColor: active ? activeBg : inactiveBorder,
-              backgroundColor: active ? activeBg : inactiveBg,
-            }}
-          >
-            <Text className="text-sm font-medium" style={{ color: active ? activeText : inactiveText }}>
-              {chip.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
-export default function ImportExportScreen() {
+export default function BackupSyncScreen() {
   const colors = useThemeColors();
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === "dark";
@@ -354,7 +222,12 @@ export default function ImportExportScreen() {
           title="Cloud backup"
           subtitle="Back up all records to your Google Drive. Only this app can see the backup file, and each backup replaces the previous one."
         >
-          <ModeSelector value={cloud.mode} onChange={cloud.setMode} disabled={anyBusy} />
+          <SegmentedControl
+            options={MODE_OPTIONS}
+            value={cloud.mode}
+            onChange={cloud.setMode}
+            disabled={anyBusy}
+          />
 
           {cloud.mode === "automatic" ? (
             <View className="mt-4">
@@ -362,7 +235,8 @@ export default function ImportExportScreen() {
                 How often
               </Text>
               <View className="mt-2">
-                <PeriodChips
+                <ChipRow
+                  options={PERIOD_OPTIONS}
                   value={cloud.periodKey}
                   onChange={cloud.setPeriodKey}
                   disabled={anyBusy}

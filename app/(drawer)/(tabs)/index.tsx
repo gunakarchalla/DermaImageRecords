@@ -17,12 +17,13 @@ import {
 import { FlashList } from "@shopify/flash-list";
 import { useColorScheme } from "nativewind";
 
-import { PatientListItem } from "../../components/PatientListItem";
-import { useDatasetFocusRefresh } from "../../hooks/useDatasetFocusRefresh";
-import { useThemeColors } from "../../hooks/useThemeColors";
-import { patientIndexService } from "../../services/indexing/patientIndexService";
-import { deletePatient } from "../../services/storage/storage";
-import type { Patient } from "../../types/models";
+import { PatientListItem } from "../../../components/PatientListItem";
+import { ChipRow, type ChipOption } from "../../../components/ui/ChipRow";
+import { useDatasetFocusRefresh } from "../../../hooks/useDatasetFocusRefresh";
+import { useThemeColors } from "../../../hooks/useThemeColors";
+import { patientIndexService } from "../../../services/indexing/patientIndexService";
+import { deletePatient } from "../../../services/storage/storage";
+import type { Patient } from "../../../types/models";
 
 type SortField = "updatedAt" | "createdAt" | "name";
 type SortDirection = "asc" | "desc";
@@ -31,6 +32,12 @@ const DEFAULT_SORT: { field: SortField; direction: SortDirection } = {
   field: "updatedAt",
   direction: "desc",
 };
+
+const SORT_OPTIONS: readonly ChipOption<SortField>[] = [
+  { label: "Modified", value: "updatedAt" },
+  { label: "Created", value: "createdAt" },
+  { label: "Name", value: "name" },
+];
 
 const PAGE_SIZE = 50;
 
@@ -211,33 +218,7 @@ export default function HomeScreen() {
 
         <View className="flex-row items-center mt-3">
           <Text className="text-sm text-slate-600 mr-2 dark:text-slate-400">Sort:</Text>
-          {(
-            [
-              { label: "Modified", value: "updatedAt" },
-              { label: "Created", value: "createdAt" },
-              { label: "Name", value: "name" },
-            ] as { label: string; value: SortField }[]
-          ).map((option) => (
-            <Pressable
-              key={option.value}
-              onPress={() => setField(option.value)}
-              className={`px-3 py-1 mr-2 rounded-full border ${
-                sort.field === option.value
-                  ? "bg-slate-900 border-slate-900 dark:bg-slate-100 dark:border-slate-100"
-                  : "border-slate-200 dark:border-slate-700"
-              }`}
-            >
-              <Text
-                className={`text-xs font-semibold ${
-                  sort.field === option.value
-                    ? "text-white dark:text-slate-900"
-                    : "text-slate-700 dark:text-slate-300"
-                }`}
-              >
-                {option.label}
-              </Text>
-            </Pressable>
-          ))}
+          <ChipRow options={SORT_OPTIONS} value={sort.field} onChange={setField} size="sm" />
 
           <Pressable
             onPress={toggleDirection}

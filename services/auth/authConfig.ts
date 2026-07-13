@@ -4,7 +4,7 @@ import Constants from "expo-constants";
 // URL, the *publishable/anon* key, and Google OAuth client IDs). The Supabase
 // secret / service_role key must NEVER be shipped in the client — it bypasses
 // Row-Level Security. Read via expo-constants, mirroring the version lookup in
-// app/(tabs)/info/about.tsx.
+// app/(drawer)/info/about.tsx.
 
 type AuthExtra = {
     supabaseUrl?: string;

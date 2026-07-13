@@ -28,7 +28,7 @@ function useAuthRedirect(isSignedIn: boolean, loading: boolean) {
     if (!isSignedIn && !inAuthGroup) {
       router.replace("/(auth)/sign-in");
     } else if (isSignedIn && inAuthGroup) {
-      router.replace("/(tabs)");
+      router.replace("/(drawer)/(tabs)");
     }
   }, [isSignedIn, loading, segments, router]);
 }
@@ -74,9 +74,9 @@ function RootNavigator() {
             them. Groups are declared so Protected can prevent the tabs from
             mounting while signed out. */}
         <Stack.Protected guard={isSignedIn}>
-          {/* The (tabs) group renders its own headers (per-tab), so
+          {/* The (drawer) group renders its own headers (drawer/tabs), so
               suppress the parent Stack header for it. */}
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="(drawer)" options={{ headerShown: false }} />
         </Stack.Protected>
 
         <Stack.Protected guard={!isSignedIn}>

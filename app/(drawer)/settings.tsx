@@ -2,11 +2,13 @@ import { Feather } from "@expo/vector-icons";
 import Slider from "@react-native-community/slider";
 import { useFocusEffect } from "expo-router";
 import { useColorScheme } from "nativewind";
-import type { ComponentProps, ReactNode } from "react";
 import { useCallback, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, Switch, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { ChipRow } from "../../components/ui/ChipRow";
+import { Section } from "../../components/ui/Section";
+import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import {
   FONT_SCALE_STEPS,
   IMAGE_FORMAT_KEYS,
@@ -15,8 +17,6 @@ import {
   IMAGE_QUALITY_RANGE,
   MAX_DIMENSION_OPTIONS,
   describeImageSettings,
-  type ImageFormat,
-  type MaxDimension,
 } from "../../constants/preferences";
 import { useThemeColors } from "../../hooks/useThemeColors";
 import { useSettings } from "../../services/preferences/SettingsProvider";
@@ -28,39 +28,14 @@ import {
   wipeAllDataAsync,
 } from "../../services/storage/storageLocation";
 
-type FeatherName = ComponentProps<typeof Feather>["name"];
+const IMAGE_FORMAT_OPTIONS = IMAGE_FORMAT_KEYS.map((format) => ({
+  value: format,
+  label: IMAGE_FORMATS[format].label,
+}));
 
-function SettingsSection({
-  icon,
-  title,
-  subtitle,
-  children,
-}: {
-  icon: FeatherName;
-  title: string;
-  subtitle: string;
-  children: ReactNode;
-}) {
-  const colors = useThemeColors();
-  return (
-    <View className="mb-5">
-      <View className="mb-2 flex-row items-center">
-        <Feather name={icon} size={16} color={colors.icon} />
-        <Text className="ml-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-          {title}
-        </Text>
-      </View>
-      <View className="rounded-xl bg-white p-4 shadow-sm dark:bg-slate-900">
-        <Text className="text-sm text-slate-500 dark:text-slate-400">{subtitle}</Text>
-        <View className="mt-3">{children}</View>
-      </View>
-    </View>
-  );
-}
-
-// The three controls below keep `className` static and drive their selected-state colors
-// through inline `style`. Toggling a NativeWind class post-render trips css-interop's
-// View→Pressable upgrade path, which surfaces as a bogus navigation-context crash.
+// PresetRow keeps `className` static and drives its selected-state colors through inline
+// `style`. Toggling a NativeWind class post-render trips css-interop's View→Pressable
+// upgrade path, which surfaces as a bogus navigation-context crash.
 
 function PresetRow({
   label,
@@ -119,94 +94,6 @@ function PresetRow({
         <Text className="mt-1 text-xs text-slate-500 dark:text-slate-400">{description}</Text>
       </View>
     </Pressable>
-  );
-}
-
-function FormatSelector({
-  value,
-  onChange,
-}: {
-  value: ImageFormat;
-  onChange: (format: ImageFormat) => void;
-}) {
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === "dark";
-  const trackBg = isDark ? "#1e293b" : "#f1f5f9"; // slate-800 / slate-100
-  const activeBg = isDark ? "#475569" : "#ffffff"; // slate-600 / white
-  const activeText = isDark ? "#f1f5f9" : "#0f172a"; // slate-100 / slate-900
-  const inactiveText = isDark ? "#94a3b8" : "#64748b"; // slate-400 / slate-500
-
-  return (
-    <View style={{ flexDirection: "row", borderRadius: 8, padding: 4, backgroundColor: trackBg }}>
-      {IMAGE_FORMAT_KEYS.map((format) => {
-        const active = format === value;
-        return (
-          <Pressable
-            key={format}
-            onPress={() => onChange(format)}
-            style={{
-              flex: 1,
-              alignItems: "center",
-              borderRadius: 6,
-              paddingVertical: 8,
-              backgroundColor: active ? activeBg : "transparent",
-            }}
-          >
-            <Text
-              className="text-sm font-semibold"
-              style={{ color: active ? activeText : inactiveText }}
-            >
-              {IMAGE_FORMATS[format].label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
-function ResolutionChips({
-  value,
-  onChange,
-}: {
-  value: MaxDimension;
-  onChange: (maxDimension: MaxDimension) => void;
-}) {
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === "dark";
-  const activeBg = isDark ? "#f1f5f9" : "#0f172a"; // slate-100 / slate-900
-  const activeText = isDark ? "#0f172a" : "#ffffff";
-  const inactiveBorder = isDark ? "#334155" : "#cbd5e1"; // slate-700 / slate-300
-  const inactiveBg = isDark ? "#1e293b" : "#ffffff"; // slate-800 / white
-  const inactiveText = isDark ? "#e2e8f0" : "#334155"; // slate-200 / slate-700
-
-  return (
-    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-      {MAX_DIMENSION_OPTIONS.map((option) => {
-        const active = option.value === value;
-        return (
-          <Pressable
-            key={option.label}
-            onPress={() => onChange(option.value)}
-            style={{
-              borderRadius: 999,
-              borderWidth: 1,
-              paddingHorizontal: 16,
-              paddingVertical: 8,
-              borderColor: active ? activeBg : inactiveBorder,
-              backgroundColor: active ? activeBg : inactiveBg,
-            }}
-          >
-            <Text
-              className="text-sm font-medium"
-              style={{ color: active ? activeText : inactiveText }}
-            >
-              {option.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
   );
 }
 
@@ -312,7 +199,7 @@ export default function SettingsScreen() {
     <SafeAreaView edges={["bottom", "left", "right"]} className="flex-1 bg-slate-50 dark:bg-slate-950">
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
         {/* 1. Theme */}
-        <SettingsSection
+        <Section
           icon="moon"
           title="Theme"
           subtitle="Switch between light and dark appearance."
@@ -336,10 +223,10 @@ export default function SettingsScreen() {
               ios_backgroundColor="#cbd5e1"
             />
           </View>
-        </SettingsSection>
+        </Section>
 
         {/* 2. Font Size */}
-        <SettingsSection
+        <Section
           icon="type"
           title="Font Size"
           subtitle="Scale the text size across the whole app."
@@ -373,10 +260,10 @@ export default function SettingsScreen() {
               The quick brown fox jumps over the lazy dog.
             </Text>
           </View>
-        </SettingsSection>
+        </Section>
 
         {/* 3. Image Storage */}
-        <SettingsSection
+        <Section
           icon="image"
           title="Image Storage"
           subtitle="How new photos are encoded before they're saved. Photos already on disk are left as they are."
@@ -423,7 +310,8 @@ export default function SettingsScreen() {
                 Format
               </Text>
               <View className="mt-2">
-                <FormatSelector
+                <SegmentedControl
+                  options={IMAGE_FORMAT_OPTIONS}
                   value={imageSettings.format}
                   onChange={(format) => setImageSettings({ ...imageSettings, format })}
                 />
@@ -471,7 +359,8 @@ export default function SettingsScreen() {
                 Max resolution
               </Text>
               <View className="mt-2">
-                <ResolutionChips
+                <ChipRow
+                  options={MAX_DIMENSION_OPTIONS}
                   value={imageSettings.maxDimension}
                   onChange={(maxDimension) => setImageSettings({ ...imageSettings, maxDimension })}
                 />
@@ -482,10 +371,10 @@ export default function SettingsScreen() {
               </Text>
             </View>
           ) : null}
-        </SettingsSection>
+        </Section>
 
         {/* 4. Change Folder */}
-        <SettingsSection
+        <Section
           icon="folder"
           title="Change Folder"
           subtitle="Where patient & consultation data is stored on this device."
@@ -521,10 +410,10 @@ export default function SettingsScreen() {
               Not available on this platform — data is kept in a fixed app folder.
             </Text>
           ) : null}
-        </SettingsSection>
+        </Section>
 
         {/* 5. Wipe Data */}
-        <SettingsSection
+        <Section
           icon="trash-2"
           title="Wipe Data"
           subtitle="Permanently delete all patient & consultation data."
@@ -550,7 +439,7 @@ export default function SettingsScreen() {
           <Text className="mt-2 text-xs text-slate-400 dark:text-slate-500">
             This cannot be undone.
           </Text>
-        </SettingsSection>
+        </Section>
       </ScrollView>
     </SafeAreaView>
   );

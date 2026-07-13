@@ -1,6 +1,5 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { Image } from "expo-image";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -10,7 +9,6 @@ import {
   FlatList,
   GestureResponderEvent,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -28,13 +26,26 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import {
   IMMERSIVE,
-  OverlayChip,
   OverlayIconButton,
   OverlayPill,
-  RuleOfThirdsGrid,
   type FeatherName,
 } from "../../../../../components/ImmersiveControls";
 import { PhotoSlide } from "../../../../../components/PhotoSlide";
+import {
+  CROP_CANVAS_PADDING,
+  clamp,
+  computeImageFrame,
+  cropRectToImagePixels,
+  fitCropRect,
+  moveCropRect,
+  resizeCropRect,
+  type CropRect,
+  type ResizeCorner,
+  type Size,
+} from "../../../../../features/photos/cropGeometry";
+import { CropOverlay } from "../../../../../features/photos/CropOverlay";
+import { CropToolbar } from "../../../../../features/photos/CropToolbar";
+import { Filmstrip } from "../../../../../features/photos/Filmstrip";
 import { mapWithConcurrency } from "../../../../../services/async";
 import { toRenderableImageUriAsync } from "../../../../../services/imageUri";
 import {
@@ -42,139 +53,6 @@ import {
   saveConsultation,
 } from "../../../../../services/storage/storage";
 import type { Consultation } from "../../../../../types/models";
-
-type CropRect = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
-
-type Size = { width: number; height: number };
-
-type ResizeCorner = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
-
-const MIN_CROP_SIZE = 56;
-const HANDLE_SIZE = 44;
-const THUMB_SIZE = 56;
-const CROP_CANVAS_PADDING = 12;
-
-/** `null` is a free-form crop; the numbers are width / height. */
-const ASPECT_PRESETS: { label: string; value: number | null }[] = [
-  { label: "Free", value: null },
-  { label: "1:1", value: 1 },
-  { label: "4:3", value: 4 / 3 },
-  { label: "3:4", value: 3 / 4 },
-];
-
-const clamp = (value: number, min: number, max: number) =>
-  Math.max(min, Math.min(max, value));
-
-/** Letterboxed rect the image actually occupies inside a `contentFit="contain"` canvas. */
-const computeImageFrame = (canvas: Size, image: Size): CropRect => {
-  const imageAspect = image.width / image.height;
-  const canvasAspect = canvas.width / canvas.height;
-
-  if (imageAspect > canvasAspect) {
-    const frameHeight = canvas.width / imageAspect;
-    return {
-      x: 0,
-      y: (canvas.height - frameHeight) / 2,
-      width: canvas.width,
-      height: frameHeight,
-    };
-  }
-
-  const frameWidth = canvas.height * imageAspect;
-  return {
-    x: (canvas.width - frameWidth) / 2,
-    y: 0,
-    width: frameWidth,
-    height: canvas.height,
-  };
-};
-
-/** Starting crop rectangle: inset from the image frame, honouring a locked aspect ratio. */
-const fitCropRect = (frame: CropRect, aspect: number | null): CropRect => {
-  if (aspect === null) {
-    const marginX = frame.width * 0.12;
-    const marginY = frame.height * 0.12;
-    return {
-      x: frame.x + marginX,
-      y: frame.y + marginY,
-      width: Math.max(MIN_CROP_SIZE, frame.width - marginX * 2),
-      height: Math.max(MIN_CROP_SIZE, frame.height - marginY * 2),
-    };
-  }
-
-  const maxWidth = frame.width * 0.86;
-  const maxHeight = frame.height * 0.86;
-
-  let width = maxWidth;
-  let height = width / aspect;
-  if (height > maxHeight) {
-    height = maxHeight;
-    width = height * aspect;
-  }
-
-  return {
-    x: frame.x + (frame.width - width) / 2,
-    y: frame.y + (frame.height - height) / 2,
-    width,
-    height,
-  };
-};
-
-/** Corner bracket + invisible 44pt touch target, centred on the crop corner. */
-function CropHandle({
-  corner,
-  rect,
-  onGrant,
-  onMove,
-  onRelease,
-}: {
-  corner: ResizeCorner;
-  rect: CropRect;
-  onGrant: (corner: ResizeCorner, event: GestureResponderEvent) => void;
-  onMove: (event: GestureResponderEvent) => void;
-  onRelease: () => void;
-}) {
-  const isLeft = corner === "topLeft" || corner === "bottomLeft";
-  const isTop = corner === "topLeft" || corner === "topRight";
-
-  const cornerX = isLeft ? rect.x : rect.x + rect.width;
-  const cornerY = isTop ? rect.y : rect.y + rect.height;
-
-  const bracket = {
-    backgroundColor: IMMERSIVE.hairline,
-    position: "absolute" as const,
-    borderRadius: 2,
-    ...(isLeft ? { left: HANDLE_SIZE / 2 - 3 } : { right: HANDLE_SIZE / 2 - 3 }),
-    ...(isTop ? { top: HANDLE_SIZE / 2 - 3 } : { bottom: HANDLE_SIZE / 2 - 3 }),
-  };
-
-  return (
-    <View
-      onStartShouldSetResponder={() => true}
-      onResponderGrant={(event) => onGrant(corner, event)}
-      onResponderMove={onMove}
-      onResponderRelease={onRelease}
-      onResponderTerminate={onRelease}
-      hitSlop={10}
-      accessibilityLabel={`Resize crop from ${corner}`}
-      style={{
-        position: "absolute",
-        left: cornerX - HANDLE_SIZE / 2,
-        top: cornerY - HANDLE_SIZE / 2,
-        width: HANDLE_SIZE,
-        height: HANDLE_SIZE,
-      }}
-    >
-      <View pointerEvents="none" style={{ ...bracket, width: 22, height: 3 }} />
-      <View pointerEvents="none" style={{ ...bracket, width: 3, height: 22 }} />
-    </View>
-  );
-}
 
 /** Labelled icon action in the viewer's bottom bar. */
 function ActionButton({
@@ -457,74 +335,6 @@ export default function ConsultationPhotosScreen() {
     );
   }, []);
 
-  const updateCropRectByMove = useCallback(
-    (dx: number, dy: number) => {
-      const start = cropStartRectRef.current;
-      if (!start || !cropImageFrame) return;
-
-      setCropRect({
-        x: clamp(
-          start.x + dx,
-          cropImageFrame.x,
-          cropImageFrame.x + cropImageFrame.width - start.width,
-        ),
-        y: clamp(
-          start.y + dy,
-          cropImageFrame.y,
-          cropImageFrame.y + cropImageFrame.height - start.height,
-        ),
-        width: start.width,
-        height: start.height,
-      });
-    },
-    [cropImageFrame],
-  );
-
-  const updateCropRectFromCornerDrag = useCallback(
-    (corner: ResizeCorner, dx: number, dy: number) => {
-      const start = cropStartRectRef.current;
-      if (!start || !cropImageFrame) return;
-
-      const isLeft = corner === "topLeft" || corner === "bottomLeft";
-      const isTop = corner === "topLeft" || corner === "topRight";
-
-      // The corner opposite the one being dragged stays pinned.
-      const anchorX = isLeft ? start.x + start.width : start.x;
-      const anchorY = isTop ? start.y + start.height : start.y;
-      const movingX = (isLeft ? start.x : start.x + start.width) + dx;
-      const movingY = (isTop ? start.y : start.y + start.height) + dy;
-
-      const spaceX = isLeft
-        ? anchorX - cropImageFrame.x
-        : cropImageFrame.x + cropImageFrame.width - anchorX;
-      const spaceY = isTop
-        ? anchorY - cropImageFrame.y
-        : cropImageFrame.y + cropImageFrame.height - anchorY;
-
-      let nextWidth = clamp(Math.abs(movingX - anchorX), MIN_CROP_SIZE, spaceX);
-      let nextHeight = clamp(Math.abs(movingY - anchorY), MIN_CROP_SIZE, spaceY);
-
-      if (cropAspect) {
-        // Width leads; fall back to height-leads when the derived height would
-        // overflow the space left between the anchor and the image edge.
-        nextHeight = nextWidth / cropAspect;
-        if (nextHeight > spaceY || nextHeight < MIN_CROP_SIZE) {
-          nextHeight = clamp(nextHeight, MIN_CROP_SIZE, spaceY);
-          nextWidth = clamp(nextHeight * cropAspect, MIN_CROP_SIZE, spaceX);
-          nextHeight = nextWidth / cropAspect;
-        }
-      }
-
-      setCropRect({
-        x: isLeft ? anchorX - nextWidth : anchorX,
-        y: isTop ? anchorY - nextHeight : anchorY,
-        width: nextWidth,
-        height: nextHeight,
-      });
-    },
-    [cropAspect, cropImageFrame],
-  );
-
   const startCropDrag = useCallback(
     (mode: "move" | ResizeCorner, event: GestureResponderEvent) => {
       if (!cropRect) return;
@@ -542,18 +352,19 @@ export default function ConsultationPhotosScreen() {
     (event: GestureResponderEvent) => {
       const mode = cropDragModeRef.current;
       const startPoint = cropDragStartRef.current;
-      if (!mode || !startPoint) return;
+      const start = cropStartRectRef.current;
+      if (!mode || !startPoint || !start || !cropImageFrame) return;
 
       const dx = event.nativeEvent.pageX - startPoint.x;
       const dy = event.nativeEvent.pageY - startPoint.y;
 
-      if (mode === "move") {
-        updateCropRectByMove(dx, dy);
-      } else {
-        updateCropRectFromCornerDrag(mode, dx, dy);
-      }
+      setCropRect(
+        mode === "move"
+          ? moveCropRect(start, cropImageFrame, dx, dy)
+          : resizeCropRect(start, cropImageFrame, cropAspect, mode, dx, dy),
+      );
     },
-    [updateCropRectByMove, updateCropRectFromCornerDrag],
+    [cropAspect, cropImageFrame],
   );
 
   const endCropDrag = useCallback(() => {
@@ -575,33 +386,11 @@ export default function ConsultationPhotosScreen() {
 
     setMutating(true);
     try {
-      const scaleX = cropImageSize.width / cropImageFrame.width;
-      const scaleY = cropImageSize.height / cropImageFrame.height;
-
-      const originX = clamp(
-        Math.round((cropRect.x - cropImageFrame.x) * scaleX),
-        0,
-        cropImageSize.width - 1,
-      );
-      const originY = clamp(
-        Math.round((cropRect.y - cropImageFrame.y) * scaleY),
-        0,
-        cropImageSize.height - 1,
-      );
-      const cropWidth = clamp(
-        Math.round(cropRect.width * scaleX),
-        1,
-        cropImageSize.width - originX,
-      );
-      const cropHeight = clamp(
-        Math.round(cropRect.height * scaleY),
-        1,
-        cropImageSize.height - originY,
-      );
+      const pixels = cropRectToImagePixels(cropRect, cropImageFrame, cropImageSize);
 
       const result = await ImageManipulator.manipulateAsync(
         cropSourceUri,
-        [{ crop: { originX, originY, width: cropWidth, height: cropHeight } }],
+        [{ crop: pixels }],
         { compress: 1, format: ImageManipulator.SaveFormat.JPEG },
       );
 
@@ -738,112 +527,21 @@ export default function ConsultationPhotosScreen() {
       {screenOptions}
 
       {isCropping ? (
-        <View
+        <CropOverlay
+          displayUri={
+            currentPhotoUri
+              ? (displayUris[currentPhotoUri] ?? currentPhotoUri)
+              : ""
+          }
+          cropRect={cropRect}
+          top={topBarHeight + CROP_CANVAS_PADDING}
+          bottom={bottomBarHeight + CROP_CANVAS_PADDING}
+          padding={CROP_CANVAS_PADDING}
           onLayout={onCropCanvasLayout}
-          style={{
-            position: "absolute",
-            top: topBarHeight + CROP_CANVAS_PADDING,
-            bottom: bottomBarHeight + CROP_CANVAS_PADDING,
-            left: CROP_CANVAS_PADDING,
-            right: CROP_CANVAS_PADDING,
-          }}
-        >
-          {currentPhotoUri ? (
-            <Image
-              source={{ uri: displayUris[currentPhotoUri] ?? currentPhotoUri }}
-              style={StyleSheet.absoluteFill}
-              contentFit="contain"
-            />
-          ) : null}
-
-          {cropRect ? (
-            <>
-              {/* Dim everything outside the crop rectangle. */}
-              <View
-                pointerEvents="none"
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  right: 0,
-                  top: 0,
-                  height: cropRect.y,
-                  backgroundColor: "rgba(2,6,23,0.6)",
-                }}
-              />
-              <View
-                pointerEvents="none"
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  right: 0,
-                  top: cropRect.y + cropRect.height,
-                  bottom: 0,
-                  backgroundColor: "rgba(2,6,23,0.6)",
-                }}
-              />
-              <View
-                pointerEvents="none"
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  top: cropRect.y,
-                  width: cropRect.x,
-                  height: cropRect.height,
-                  backgroundColor: "rgba(2,6,23,0.6)",
-                }}
-              />
-              <View
-                pointerEvents="none"
-                style={{
-                  position: "absolute",
-                  left: cropRect.x + cropRect.width,
-                  right: 0,
-                  top: cropRect.y,
-                  height: cropRect.height,
-                  backgroundColor: "rgba(2,6,23,0.6)",
-                }}
-              />
-
-              <View
-                onStartShouldSetResponder={() => true}
-                onResponderGrant={(event) => startCropDrag("move", event)}
-                onResponderMove={onCropDragMove}
-                onResponderRelease={endCropDrag}
-                onResponderTerminate={endCropDrag}
-                accessibilityLabel="Move crop area"
-                style={{
-                  position: "absolute",
-                  left: cropRect.x,
-                  top: cropRect.y,
-                  width: cropRect.width,
-                  height: cropRect.height,
-                  borderWidth: 1,
-                  borderColor: "rgba(226,232,240,0.7)",
-                }}
-              >
-                <RuleOfThirdsGrid inset />
-              </View>
-
-              {(
-                [
-                  "topLeft",
-                  "topRight",
-                  "bottomLeft",
-                  "bottomRight",
-                ] as ResizeCorner[]
-              ).map((corner) => (
-                <CropHandle
-                  key={corner}
-                  corner={corner}
-                  rect={cropRect}
-                  onGrant={startCropDrag}
-                  onMove={onCropDragMove}
-                  onRelease={endCropDrag}
-                />
-              ))}
-            </>
-          ) : null}
-        </View>
+          onDragStart={startCropDrag}
+          onDragMove={onCropDragMove}
+          onDragEnd={endCropDrag}
+        />
       ) : (
         <FlatList
           ref={pagerRef}
@@ -927,113 +625,29 @@ export default function ConsultationPhotosScreen() {
           }}
         >
           {isCropping ? (
-            <View className="px-4 pb-4 pt-4">
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ gap: 8 }}
-              >
-                {ASPECT_PRESETS.map((preset) => (
-                  <OverlayChip
-                    key={preset.label}
-                    label={preset.label}
-                    active={cropAspect === preset.value}
-                    disabled={mutating}
-                    onPress={() => setCropAspect(preset.value)}
-                  />
-                ))}
-                <OverlayChip
-                  label="Reset"
-                  disabled={mutating || !cropImageFrame}
-                  onPress={() => {
-                    if (!cropImageFrame) return;
-                    setCropRect(fitCropRect(cropImageFrame, cropAspect));
-                  }}
-                />
-              </ScrollView>
-
-              <View className="mt-4 flex-row" style={{ gap: 10 }}>
-                <Pressable
-                  disabled={mutating}
-                  onPress={discardCropMode}
-                  accessibilityLabel="Discard crop"
-                  className="flex-1 items-center rounded-xl py-3"
-                  style={{
-                    borderWidth: 1,
-                    borderColor: IMMERSIVE.controlBorder,
-                    opacity: mutating ? 0.5 : 1,
-                  }}
-                >
-                  <Text className="text-sm font-semibold text-slate-200">
-                    Discard
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  disabled={mutating || !cropRect}
-                  onPress={() => void saveCrop()}
-                  accessibilityLabel="Save crop"
-                  className="flex-1 items-center rounded-xl py-3"
-                  style={{
-                    backgroundColor: IMMERSIVE.active,
-                    opacity: mutating || !cropRect ? 0.5 : 1,
-                  }}
-                >
-                  <Text
-                    className="text-sm font-semibold"
-                    style={{ color: IMMERSIVE.onActive }}
-                  >
-                    Save
-                  </Text>
-                </Pressable>
-              </View>
-            </View>
+            <CropToolbar
+              aspect={cropAspect}
+              onAspectChange={setCropAspect}
+              onReset={() => {
+                if (!cropImageFrame) return;
+                setCropRect(fitCropRect(cropImageFrame, cropAspect));
+              }}
+              resetDisabled={!cropImageFrame}
+              onDiscard={discardCropMode}
+              onSave={() => void saveCrop()}
+              saveDisabled={!cropRect}
+              disabled={mutating}
+            />
           ) : (
             <>
               {photoUris.length > 1 ? (
-                <FlatList
-                  ref={stripRef}
-                  data={photoUris}
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  keyExtractor={(item) => item}
-                  className="pt-3"
-                  contentContainerStyle={{ paddingHorizontal: 12, gap: 8 }}
-                  getItemLayout={(_, listIndex) => ({
-                    length: THUMB_SIZE + 8,
-                    offset: (THUMB_SIZE + 8) * listIndex,
-                    index: listIndex,
-                  })}
-                  onScrollToIndexFailed={() => {}}
-                  renderItem={({ item, index: itemIndex }) => {
-                    const selected = itemIndex === activeIndex;
-                    return (
-                      <Pressable
-                        onPress={() => setActiveIndex(itemIndex)}
-                        disabled={mutating}
-                        accessibilityLabel={`Show photo ${itemIndex + 1}`}
-                        accessibilityState={{ selected }}
-                        className="overflow-hidden rounded-xl"
-                        style={{
-                          width: THUMB_SIZE,
-                          height: THUMB_SIZE,
-                          borderWidth: 2,
-                          borderColor: selected
-                            ? IMMERSIVE.active
-                            : "transparent",
-                          opacity: selected ? 1 : 0.55,
-                        }}
-                      >
-                        <Image
-                          source={{ uri: displayUris[item] ?? item }}
-                          recyclingKey={item}
-                          cachePolicy="memory-disk"
-                          style={{ flex: 1 }}
-                          contentFit="cover"
-                        />
-                      </Pressable>
-                    );
-                  }}
+                <Filmstrip
+                  listRef={stripRef}
+                  photoUris={photoUris}
+                  displayUris={displayUris}
+                  activeIndex={activeIndex}
+                  onSelect={setActiveIndex}
+                  disabled={mutating}
                 />
               ) : null}
 
