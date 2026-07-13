@@ -1,12 +1,13 @@
 import { Feather } from "@expo/vector-icons";
+import { FlashList } from "@shopify/flash-list";
 import { Image } from "expo-image";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
-  ScrollView,
   Text,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -18,9 +19,14 @@ import { consultationIndexService } from "../../../../services/indexing/consulta
 import { getConsultation } from "../../../../services/storage/storage";
 import { Consultation } from "../../../../types/models";
 
+const COLUMNS = 3;
+const GRID_PADDING = 16;
+const CELL_GAP = 6;
+
 export default function ViewConsultationScreen() {
   const router = useRouter();
   const colors = useThemeColors();
+  const { width } = useWindowDimensions();
   const { patientId, consultationId } = useLocalSearchParams<{
     patientId: string;
     consultationId: string;
@@ -50,6 +56,36 @@ export default function ViewConsultationScreen() {
   // Re-query only when the dataset changed (e.g. returning from an edit), not on every focus.
   useDatasetFocusRefresh(load);
 
+  const openPhoto = useCallback(
+    (index: number) => {
+      router.push(
+        `/patient/${patientId}/consultation/${consultationId}/photos?index=${index}`,
+      );
+    },
+    [consultationId, patientId, router],
+  );
+
+  const cellSize = (width - GRID_PADDING * 2) / COLUMNS;
+
+  const renderPhoto = useCallback(
+    ({ item: source, index }: { item: string; index: number }) => (
+      <Pressable
+        onPress={() => openPhoto(index)}
+        accessibilityLabel="Open photo"
+        style={{ width: cellSize, height: cellSize, padding: CELL_GAP / 2 }}
+      >
+        <Image
+          source={{ uri: photoDisplayUris[source] ?? source }}
+          recyclingKey={source}
+          cachePolicy="memory-disk"
+          style={{ flex: 1, borderRadius: 12 }}
+          contentFit="cover"
+        />
+      </Pressable>
+    ),
+    [cellSize, openPhoto, photoDisplayUris],
+  );
+
   if (loading) {
     return (
       <SafeAreaView className="flex-1 items-center justify-center bg-slate-50 dark:bg-slate-950">
@@ -68,76 +104,62 @@ export default function ViewConsultationScreen() {
     );
   }
 
+  const header = (
+    <View>
+      <View className="flex-row items-center justify-between mb-1">
+        <Text className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+          Consultation {consultation.cid}
+        </Text>
+        <Pressable
+          onPress={() =>
+            router.push(
+              `/patient/${patientId}/consultation/add?consultationId=${consultationId}`,
+            )
+          }
+          className="p-2"
+          accessibilityLabel="Edit consultation"
+        >
+          <Feather name="edit-2" size={20} color={colors.iconStrong} />
+        </Pressable>
+      </View>
+
+      <Text className="text-sm text-slate-500 mb-3 dark:text-slate-400">
+        {number ? `Visit #${number} · ` : ""}
+        Updated {new Date(consultation.updatedAt).toLocaleString()}
+      </Text>
+
+      <View className="bg-white rounded-2xl p-4 shadow-sm mb-4 dark:bg-slate-900">
+        <Text className="text-base text-slate-900 mb-2 dark:text-slate-100">Remarks</Text>
+        <Text className="text-sm text-slate-700 leading-5 dark:text-slate-200">
+          {consultation.remarks || "No remarks."}
+        </Text>
+      </View>
+
+      <Text className="text-base font-semibold text-slate-900 mb-2 dark:text-slate-100">
+        Photos
+      </Text>
+      {consultation.photoUris.length === 0 ? (
+        <View className="bg-white rounded-xl p-4 shadow-sm dark:bg-slate-900">
+          <Text className="text-slate-600 dark:text-slate-300">
+            No photos for this consultation.
+          </Text>
+        </View>
+      ) : null}
+    </View>
+  );
+
   return (
     <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950">
-      <ScrollView
-        className="flex-1"
-        contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
-      >
-        <View className="flex-row items-center justify-between mb-3">
-          <Text className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-            {number ? `Consultation #${number}` : "Consultation"}
-          </Text>
-          <Pressable
-            onPress={() =>
-              router.push(
-                `/patient/${patientId}/consultation/add?consultationId=${consultationId}`,
-              )
-            }
-            className="p-2"
-            accessibilityLabel="Edit consultation"
-          >
-            <Feather name="edit-2" size={20} color={colors.iconStrong} />
-          </Pressable>
-        </View>
-
-        <Text className="text-sm text-slate-500 mb-1 dark:text-slate-400">
-          Updated {new Date(consultation.updatedAt).toLocaleString()}
-        </Text>
-
-        <View className="bg-white rounded-2xl p-4 shadow-sm mb-4 dark:bg-slate-900">
-          <Text className="text-base text-slate-900 mb-2 dark:text-slate-100">Remarks</Text>
-          <Text className="text-sm text-slate-700 leading-5 dark:text-slate-200">
-            {consultation.remarks || "No remarks."}
-          </Text>
-        </View>
-
-        <Text className="text-base font-semibold text-slate-900 mb-2 dark:text-slate-100">
-          Photos
-        </Text>
-        {consultation.photoUris.length === 0 ? (
-          <View className="bg-white rounded-xl p-4 shadow-sm dark:bg-slate-900">
-            <Text className="text-slate-600 dark:text-slate-300">
-              No photos for this consultation.
-            </Text>
-          </View>
-        ) : (
-          <View className="flex-row flex-wrap">
-            {consultation.photoUris.map((uri, index) => {
-              const source = consultation.thumbUris[index] ?? uri;
-              return (
-                <Pressable
-                  key={uri}
-                  onPress={() =>
-                    router.push(
-                      `/patient/${patientId}/consultation/${consultationId}/photos?index=${index}`,
-                    )
-                  }
-                  accessibilityLabel="Open photo"
-                >
-                  <Image
-                    source={{ uri: photoDisplayUris[source] ?? source }}
-                    recyclingKey={source}
-                    cachePolicy="memory-disk"
-                    className="h-32 w-32 mr-3 mb-3 rounded-xl"
-                    contentFit="cover"
-                  />
-                </Pressable>
-              );
-            })}
-          </View>
-        )}
-      </ScrollView>
+      {/* The photo grid is the scroll container (virtualized — a consultation can hold
+          many photos); the title/remarks ride along as its header. */}
+      <FlashList
+        data={gridSourceUris}
+        numColumns={COLUMNS}
+        keyExtractor={(item, index) => `${index}-${item}`}
+        renderItem={renderPhoto}
+        ListHeaderComponent={header}
+        contentContainerStyle={{ padding: GRID_PADDING, paddingBottom: 48 }}
+      />
     </SafeAreaView>
   );
 }

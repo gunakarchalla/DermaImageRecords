@@ -166,6 +166,95 @@ export type PhotoCursor = {
 const photoSortKey = (capturedAt: string, patientId: string, consultationId: string, position: number) =>
     `${capturedAt}|${patientId}|${consultationId}|${String(position).padStart(4, "0")}`;
 
+/** The patient row write, shared by the single-record and batch (rebuild) paths. */
+const runUpsertPatient = async (txn: SQLite.SQLiteDatabase, patient: Patient) => {
+    await txn.runAsync(
+        `
+        INSERT INTO patients(
+            id, uid, name, nameSort, age, gender, phone,
+            profilePhotoUri, profileThumbUri, createdAt, updatedAt
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            uid = excluded.uid,
+            name = excluded.name,
+            nameSort = excluded.nameSort,
+            age = excluded.age,
+            gender = excluded.gender,
+            phone = excluded.phone,
+            profilePhotoUri = excluded.profilePhotoUri,
+            profileThumbUri = excluded.profileThumbUri,
+            createdAt = excluded.createdAt,
+            updatedAt = excluded.updatedAt
+    `,
+        [
+            patient.id,
+            patient.uid,
+            patient.name,
+            normalizeSortText(patient.name),
+            patient.age ?? null,
+            patient.gender ?? null,
+            patient.phone ?? null,
+            patient.profilePhotoUri ?? null,
+            patient.profileThumbUri ?? null,
+            patient.createdAt,
+            patient.updatedAt,
+        ]
+    );
+};
+
+/** The consultation + photo-feed row writes, shared by the single-record and batch paths. */
+const runUpsertConsultation = async (txn: SQLite.SQLiteDatabase, consultation: Consultation) => {
+    await txn.runAsync(
+        `
+        INSERT INTO consultations(id, patientId, uid, remarks, photoCount, createdAt, updatedAt)
+        VALUES(?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(patientId, id) DO UPDATE SET
+            uid = excluded.uid,
+            remarks = excluded.remarks,
+            photoCount = excluded.photoCount,
+            createdAt = excluded.createdAt,
+            updatedAt = excluded.updatedAt
+    `,
+        [
+            consultation.id,
+            consultation.patientId,
+            consultation.uid,
+            consultation.remarks,
+            consultation.photoUris.length,
+            consultation.createdAt,
+            consultation.updatedAt,
+        ]
+    );
+
+    // Photo rows are replaced wholesale: the consultation's photo list is small and
+    // this keeps positions/URIs exact after any add/remove/edit.
+    await txn.runAsync("DELETE FROM photos WHERE patientId = ? AND consultationId = ?", [
+        consultation.patientId,
+        consultation.id,
+    ]);
+    for (let position = 0; position < consultation.photos.length; position += 1) {
+        const entry = consultation.photos[position];
+        await txn.runAsync(
+            `
+            INSERT INTO photos(
+                patientId, consultationId, uid, file, position, uri, thumbUri, capturedAt, sortKey
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+            [
+                consultation.patientId,
+                consultation.id,
+                entry.uid,
+                entry.file,
+                position,
+                consultation.photoUris[position],
+                consultation.thumbUris[position],
+                entry.capturedAt,
+                photoSortKey(entry.capturedAt, consultation.patientId, consultation.id, position),
+            ]
+        );
+    }
+};
+
 export const dermaDb = {
     ensureReadyAsync: async () => {
         await ensureSchemaAsync();
@@ -215,38 +304,19 @@ export const dermaDb = {
         const db = await openDbAsync();
         // Exclusive transaction keeps writes deterministic under concurrent access.
         await db.withExclusiveTransactionAsync(async (txn) => {
-            await txn.runAsync(
-                `
-                INSERT INTO patients(
-                    id, uid, name, nameSort, age, gender, phone,
-                    profilePhotoUri, profileThumbUri, createdAt, updatedAt
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    uid = excluded.uid,
-                    name = excluded.name,
-                    nameSort = excluded.nameSort,
-                    age = excluded.age,
-                    gender = excluded.gender,
-                    phone = excluded.phone,
-                    profilePhotoUri = excluded.profilePhotoUri,
-                    profileThumbUri = excluded.profileThumbUri,
-                    createdAt = excluded.createdAt,
-                    updatedAt = excluded.updatedAt
-            `,
-                [
-                    patient.id,
-                    patient.uid,
-                    patient.name,
-                    normalizeSortText(patient.name),
-                    patient.age ?? null,
-                    patient.gender ?? null,
-                    patient.phone ?? null,
-                    patient.profilePhotoUri ?? null,
-                    patient.profileThumbUri ?? null,
-                    patient.createdAt,
-                    patient.updatedAt,
-                ]
-            );
+            await runUpsertPatient(txn, patient);
+        });
+    },
+
+    /** One transaction for a whole rebuild's worth of rows — commits once, not per patient. */
+    upsertPatientsBatchAsync: async (patients: readonly Patient[]) => {
+        if (patients.length === 0) return;
+        await ensureSchemaAsync();
+        const db = await openDbAsync();
+        await db.withExclusiveTransactionAsync(async (txn) => {
+            for (const patient of patients) {
+                await runUpsertPatient(txn, patient);
+            }
         });
     },
 
@@ -361,54 +431,18 @@ export const dermaDb = {
         await ensureSchemaAsync();
         const db = await openDbAsync();
         await db.withExclusiveTransactionAsync(async (txn) => {
-            await txn.runAsync(
-                `
-                INSERT INTO consultations(id, patientId, uid, remarks, photoCount, createdAt, updatedAt)
-                VALUES(?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(patientId, id) DO UPDATE SET
-                    uid = excluded.uid,
-                    remarks = excluded.remarks,
-                    photoCount = excluded.photoCount,
-                    createdAt = excluded.createdAt,
-                    updatedAt = excluded.updatedAt
-            `,
-                [
-                    consultation.id,
-                    consultation.patientId,
-                    consultation.uid,
-                    consultation.remarks,
-                    consultation.photoUris.length,
-                    consultation.createdAt,
-                    consultation.updatedAt,
-                ]
-            );
+            await runUpsertConsultation(txn, consultation);
+        });
+    },
 
-            // Photo rows are replaced wholesale: the consultation's photo list is small and
-            // this keeps positions/URIs exact after any add/remove/edit.
-            await txn.runAsync("DELETE FROM photos WHERE patientId = ? AND consultationId = ?", [
-                consultation.patientId,
-                consultation.id,
-            ]);
-            for (let position = 0; position < consultation.photos.length; position += 1) {
-                const entry = consultation.photos[position];
-                await txn.runAsync(
-                    `
-                    INSERT INTO photos(
-                        patientId, consultationId, uid, file, position, uri, thumbUri, capturedAt, sortKey
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `,
-                    [
-                        consultation.patientId,
-                        consultation.id,
-                        entry.uid,
-                        entry.file,
-                        position,
-                        consultation.photoUris[position],
-                        consultation.thumbUris[position],
-                        entry.capturedAt,
-                        photoSortKey(entry.capturedAt, consultation.patientId, consultation.id, position),
-                    ]
-                );
+    /** One transaction for a per-patient rebuild's worth of rows. */
+    upsertConsultationsBatchAsync: async (consultations: readonly Consultation[]) => {
+        if (consultations.length === 0) return;
+        await ensureSchemaAsync();
+        const db = await openDbAsync();
+        await db.withExclusiveTransactionAsync(async (txn) => {
+            for (const consultation of consultations) {
+                await runUpsertConsultation(txn, consultation);
             }
         });
     },

@@ -1,7 +1,7 @@
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, InteractionManager, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
@@ -10,6 +10,7 @@ import { useThemeColors } from "../hooks/useThemeColors";
 import { AuthProvider, useAuth } from "../services/auth/AuthProvider";
 import { BackupProvider } from "../services/backup/BackupProvider";
 import { SettingsProvider } from "../services/preferences/SettingsProvider";
+import { sweepTempFilesAsync } from "../services/storage/tempSweep";
 import "../services/nativewindInterop";
 import "./global.css";
 
@@ -91,6 +92,14 @@ function RootNavigator() {
 }
 
 export default function RootLayout() {
+  // One cold-start sweep of abandoned cache temps, off the critical path.
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => {
+      void sweepTempFilesAsync();
+    });
+    return () => task.cancel();
+  }, []);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>

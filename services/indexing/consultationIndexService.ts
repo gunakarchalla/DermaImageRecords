@@ -45,19 +45,18 @@ export const consultationIndexService = {
                 const entries = listEntriesSafe(consultationsRoot).filter(
                     (e): e is Directory => e instanceof Directory && !isTempFolderName(e.name),
                 );
-                for (const dir of entries) {
-                    // A consultation folder is one that holds a v2 consultation.json; the folder
-                    // name is the CID. The display number is derived at query time, not stored.
+                // A consultation folder is one that holds a v2 consultation.json; the folder
+                // name is the CID. The display number is derived at query time, not stored.
+                // Reads fan out; rows land in one transaction.
+                const consultations = await mapWithConcurrency(entries, 8, async (dir) => {
                     const consultation = await readConsultationAsync(dir);
-                    if (!consultation) continue;
-
-                    await dermaDb.upsertConsultationAsync({
-                        ...consultation,
-                        id: dir.name,
-                        cid: dir.name,
-                        patientId,
-                    });
-                }
+                    return consultation
+                        ? { ...consultation, id: dir.name, cid: dir.name, patientId }
+                        : null;
+                });
+                await dermaDb.upsertConsultationsBatchAsync(
+                    consultations.filter((c) => c !== null),
+                );
             }
 
             await dermaDb.setMetaAsync(consultationsPatientLastReindexAtKey(patientId), new Date().toISOString());

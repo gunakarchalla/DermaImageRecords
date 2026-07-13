@@ -1,5 +1,5 @@
 import * as Crypto from "expo-crypto";
-import { File, type Directory } from "expo-file-system";
+import { File, Paths, type Directory } from "expo-file-system";
 
 import { STORAGE } from "../../constants/storage";
 import type {
@@ -53,6 +53,17 @@ const newUid = () => Crypto.randomUUID();
 /** Zero-padded photo number for `<EMR>-<CID>-<NN>` names; grows past 99 naturally. */
 const padPhotoNumber = (n: number) => String(n).padStart(2, "0");
 
+/**
+ * Delete a photo *source* once it has been encoded into the dataset — but only when it
+ * is an app-cache temp (camera capture, picker copy, ImageManipulator output). Anything
+ * else (a persisted SAF photo, an iOS Documents file) is not ours to remove.
+ */
+const deleteSourceIfCacheTempAsync = async (sourceUri: string) => {
+    if (!sourceUri.startsWith("file://")) return;
+    if (!sourceUri.startsWith(Paths.cache.uri)) return;
+    await safeDeleteFile(new File(sourceUri));
+};
+
 /** Write `bytes-producing` encoded image into `dir` as `name`. SAF needs create-then-write. */
 const writeEncodedImageAsync = async (
     encoded: { uri: string; mimeType: string },
@@ -95,6 +106,9 @@ const savePhotoToDirAsync = async (
     } catch {
         thumb = undefined;
     }
+
+    // The capture/pick/crop temp has served its purpose; keep the cache bounded.
+    await deleteSourceIfCacheTempAsync(sourceUri);
 
     return {
         entry: {
@@ -144,6 +158,8 @@ const writeProfilePhotoAsync = async (dir: Directory, sourceUri: string) => {
             }
         }
     }
+
+    await deleteSourceIfCacheTempAsync(sourceUri);
 
     return {
         profilePhoto: photoFile.name,

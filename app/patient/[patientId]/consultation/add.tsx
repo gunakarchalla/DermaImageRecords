@@ -46,8 +46,12 @@ export default function AddConsultationScreen() {
 
   const [remarks, setRemarks] = useState("");
   const [photos, setPhotos] = useState<string[]>([]);
-  // Render-safe previews for SAF/content:// URIs; `photos` stays the persisted source-of-truth.
-  const photoPreviewUris = useResolvedPhotoUris(photos);
+  // Existing photos preview via their thumbnails (new captures have none yet); `photos`
+  // stays the list of full-image URIs that is handed to save.
+  const [thumbByUri, setThumbByUri] = useState<Record<string, string>>({});
+  const previewSources = photos.map((uri) => thumbByUri[uri] ?? uri);
+  // Render-safe previews for SAF/content:// URIs.
+  const photoPreviewUris = useResolvedPhotoUris(previewSources);
   const [loading, setLoading] = useState(false);
   const [pickingImage, setPickingImage] = useState(false);
 
@@ -84,7 +88,14 @@ export default function AddConsultationScreen() {
       const existing = await getConsultation(patientId, consultationId);
       if (existing) {
         setRemarks(existing.remarks);
-        setPhotos(existing.photoUris ?? []);
+        setPhotos(existing.photoUris);
+
+        const thumbs: Record<string, string> = {};
+        existing.photoUris.forEach((uri, index) => {
+          const thumb = existing.thumbUris[index];
+          if (thumb) thumbs[uri] = thumb;
+        });
+        setThumbByUri(thumbs);
       }
       setLoading(false);
     }
@@ -308,24 +319,29 @@ export default function AddConsultationScreen() {
           </View>
 
           <View className="flex-row flex-wrap">
-            {photos.map((uri) => (
-              <View key={uri} className="mr-3 mb-3 relative">
-                <Image
-                  source={{ uri: photoPreviewUris[uri] ?? uri }}
-                  className="h-24 w-24 rounded-lg"
-                  contentFit="cover"
-                />
-                <Pressable
-                  onPress={() =>
-                    setPhotos((prev) => prev.filter((p) => p !== uri))
-                  }
-                  className="absolute -top-2 -right-2 bg-white rounded-full p-1 shadow dark:bg-slate-200"
-                  accessibilityLabel="Remove photo"
-                >
-                  <Feather name="x" size={14} color="#0f172a" />
-                </Pressable>
-              </View>
-            ))}
+            {photos.map((uri) => {
+              const source = thumbByUri[uri] ?? uri;
+              return (
+                <View key={uri} className="mr-3 mb-3 relative">
+                  <Image
+                    source={{ uri: photoPreviewUris[source] ?? source }}
+                    recyclingKey={source}
+                    cachePolicy="memory-disk"
+                    className="h-24 w-24 rounded-lg"
+                    contentFit="cover"
+                  />
+                  <Pressable
+                    onPress={() =>
+                      setPhotos((prev) => prev.filter((p) => p !== uri))
+                    }
+                    className="absolute -top-2 -right-2 bg-white rounded-full p-1 shadow dark:bg-slate-200"
+                    accessibilityLabel="Remove photo"
+                  >
+                    <Feather name="x" size={14} color="#0f172a" />
+                  </Pressable>
+                </View>
+              );
+            })}
           </View>
         </View>
 

@@ -2,6 +2,7 @@ import { Directory } from "expo-file-system";
 
 import { INDEX_META } from "../../constants/indexing";
 import type { Patient } from "../../types/models";
+import { mapWithConcurrency } from "../async";
 import { dermaDb, type PatientCursor, type PatientSortField, type SortDirection } from "../db/dermaDb";
 import { listEntriesSafe } from "../storage/fsUtils";
 import { isTempFolderName, readPatientAsync } from "../storage/records";
@@ -55,16 +56,17 @@ export const patientIndexService = {
             await dermaDb.setMetaAsync(INDEX_META.patientsLastReindexAt, new Date().toISOString());
 
             // Index patients by reading + resolving patient.json in each folder. Temp/staging
-            // folders (import swaps) are never records.
+            // folders (import swaps) are never records. Reads fan out (file I/O bound);
+            // rows land in one transaction so the rebuild commits once.
             const entries = listEntriesSafe(patientsRoot).filter(
                 (e): e is Directory => e instanceof Directory && !isTempFolderName(e.name),
             );
 
-            for (const dir of entries) {
+            const patients = await mapWithConcurrency(entries, 8, async (dir) => {
                 const patient = await readPatientAsync(dir);
-                if (!patient) continue;
-                await dermaDb.upsertPatientAsync({ ...patient, id: dir.name, emrNumber: dir.name });
-            }
+                return patient ? { ...patient, id: dir.name, emrNumber: dir.name } : null;
+            });
+            await dermaDb.upsertPatientsBatchAsync(patients.filter((p) => p !== null));
 
             // Any per-patient consultation meta keys are now invalid.
             await dermaDb.deleteMetaByPrefixAsync("consultations.patient.");

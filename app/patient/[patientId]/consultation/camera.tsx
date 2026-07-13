@@ -44,6 +44,7 @@ import {
 } from "../../../../features/camera/sensorFormat";
 import { useGhostPhotos } from "../../../../features/camera/useGhostPhotos";
 import { enqueueConsultationCapture } from "../../../../services/consultationCaptureHandoff";
+import { safeDeleteFile } from "../../../../services/storage/fsUtils";
 
 const MIN_CAMERA_READY_DELAY_MS = 350;
 const CAPTURE_RETRY_DELAY_MS = 220;
@@ -162,11 +163,19 @@ export default function ConsultationCameraScreen() {
       "Keep captured photos?",
       `You have ${pending.length} unsaved photo${pending.length === 1 ? "" : "s"}.`,
       [
-        { text: "Discard", style: "destructive", onPress: () => router.back() },
+        {
+          text: "Discard",
+          style: "destructive",
+          onPress: () => {
+            // Captures are cache temps; discarded ones should not wait for the sweep.
+            pending.forEach((uri) => void safeDeleteFile(uri));
+            router.back();
+          },
+        },
         { text: "Keep", onPress: flushAndClose },
       ],
     );
-  }, [flushAndClose, pending.length, router]);
+  }, [flushAndClose, pending, router]);
 
   // Swipe-back and the hardware back button would pop the screen without handing
   // the captures over, so both are routed through `handleClose`.
@@ -313,8 +322,10 @@ export default function ConsultationCameraScreen() {
     setSensorResolved(Platform.OS !== "android");
   };
 
-  const removePending = (uri: string) =>
+  const removePending = (uri: string) => {
     setPending((prev) => prev.filter((item) => item !== uri));
+    void safeDeleteFile(uri);
+  };
 
   const onStageLayout = useCallback((event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
