@@ -1,37 +1,28 @@
 import { Feather } from "@expo/vector-icons";
-import Slider from "@react-native-community/slider";
+import { useFocusEffect } from "expo-router";
 import { useColorScheme } from "nativewind";
 import { useCallback, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, ScrollView, Switch, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import {
-  BACKUP,
-  BACKUP_PERIOD_PRESETS,
-  periodLabel,
-  type BackupMode,
-  type BackupPeriodKey,
-} from "../../constants/backup";
 import { ConflictReviewSheet } from "../../components/ConflictReviewSheet";
-import { ChipRow, type ChipOption } from "../../components/ui/ChipRow";
 import { Section } from "../../components/ui/Section";
-import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { useThemeColors } from "../../hooks/useThemeColors";
-import { useBackup } from "../../services/backup/BackupProvider";
+import {
+  describeBackupProgress,
+  type BackupProgress,
+} from "../../services/backup/progress";
+import { exportDatasetAsync } from "../../services/backup/zipExport";
 import {
   analyzeArchiveEntriesAsync,
   applyImportAsync,
+  pickAndReadArchiveAsync,
   type ArchivePlanEntry,
-  type BackupProgress,
-  describeBackupProgress,
-  exportDatasetAsync,
-  ImportCancelledError,
   type ImportDecision,
   type ImportSummary,
-  NoCloudBackupError,
-  pickAndReadArchiveAsync,
-} from "../../services/backup/backupService";
-import type { BackupManifest } from "../../services/backup/manifest";
+} from "../../services/backup/zipImport";
+import { useSync } from "../../services/sync/SyncProvider";
+import type { SyncLogRow } from "../../services/sync/syncDb";
 
 const summaryLines = (summary: ImportSummary): string[] => {
   const lines: string[] = [];
@@ -62,66 +53,52 @@ const summaryLines = (summary: ImportSummary): string[] => {
   return lines;
 };
 
-/** A "Restored from …" line from the archive's manifest / Drive timestamp, or null if unknown. */
-const restoredFromLine = (
-  manifest: BackupManifest | null,
-  modifiedTime: string | null,
-): string | null => {
-  const iso = modifiedTime ?? manifest?.exportedAt ?? null;
-  const when = iso ? new Date(iso).toLocaleDateString() : null;
-  const who = manifest?.account.email ?? null;
-  if (who && when) return `From ${who}'s backup (${when}).`;
-  if (when) return `From the backup of ${when}.`;
-  return null;
+const formatBytes = (bytes: number): string => {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 };
 
-const MODE_OPTIONS: { value: BackupMode; label: string }[] = [
-  { value: "off", label: "Off" },
-  { value: "manual", label: "Manual" },
-  { value: "automatic", label: "Automatic" },
-];
-
-const formatLastBackup = (ts: number | null): string => {
-  if (!ts) return "Never backed up";
-  const date = new Date(ts);
-  return `Last backup: ${date.toLocaleDateString()} ${date.toLocaleTimeString([], {
+const formatLastSync = (iso: string | null): string => {
+  if (!iso) return "Never synced";
+  const date = new Date(iso);
+  return `Last sync: ${date.toLocaleDateString()} ${date.toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
   })}`;
 };
 
-/** Reassure the user that a failed automatic backup is coming back on its own. */
-const formatNextRetry = (ts: number | null): string | null => {
-  if (!ts) return null;
-  if (Date.now() >= ts) return "Retrying shortly…";
-  const time = new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return `Will retry automatically around ${time}.`;
+const LOG_ICONS: Record<SyncLogRow["level"], { icon: React.ComponentProps<typeof Feather>["name"]; tone: "muted" | "warn" | "error" }> = {
+  info: { icon: "info", tone: "muted" },
+  conflict: { icon: "git-merge", tone: "warn" },
+  renamed: { icon: "edit-3", tone: "warn" },
+  error: { icon: "alert-circle", tone: "error" },
 };
-
-/** Period preset chips (Daily / Weekly / Monthly / Custom). */
-const PERIOD_OPTIONS: readonly ChipOption<BackupPeriodKey>[] = [
-  ...BACKUP_PERIOD_PRESETS.map((preset) => ({ value: preset.key, label: preset.label })),
-  { value: "custom", label: "Custom" },
-];
 
 export default function BackupSyncScreen() {
   const colors = useThemeColors();
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === "dark";
+  const sync = useSync();
+
   const [busy, setBusy] = useState<null | "export" | "import">(null);
   const [progress, setProgress] = useState<BackupProgress | null>(null);
-  // When set, the name-mismatch review sheet is open; `resolve` feeds the user's choice back to
-  // the awaiting import/restore. See ConflictReviewSheet.
   const [review, setReview] = useState<{
     mismatches: ArchivePlanEntry[];
     resolve: (decisions: Record<string, ImportDecision> | null) => void;
   } | null>(null);
 
-  const cloud = useBackup();
-  const anyBusy = busy !== null || cloud.busy;
+  const anyBusy = busy !== null || sync.status === "syncing";
 
-  // Show the review sheet and resolve once the user applies or cancels. Passed to restore as the
-  // DecisionResolver, and called directly by import when the archive has mismatches.
+  useFocusEffect(
+    useCallback(() => {
+      void sync.refreshReport();
+      if (sync.enabled) void sync.refreshQuota();
+      // Refresh-on-focus only; identities of these callbacks are stable.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sync.enabled]),
+  );
+
   const showReviewAsync = useCallback(
     (mismatches: ArchivePlanEntry[]): Promise<Record<string, ImportDecision> | null> =>
       new Promise((resolve) => setReview({ mismatches, resolve })),
@@ -135,19 +112,14 @@ export default function BackupSyncScreen() {
     },
     [review],
   );
-  // A pending retry outlives a switch away from automatic mode (so re-enabling resumes the
-  // backoff), but only automatic mode actually runs it — don't promise a retry otherwise.
-  const retryNotice =
-    cloud.busy || cloud.mode !== "automatic" ? null : formatNextRetry(cloud.nextRetryAt);
 
-  const onBackupNow = useCallback(async () => {
+  const onSyncNow = useCallback(async () => {
     try {
-      await cloud.backupNow();
-      Alert.alert("Backup complete", "Your records were backed up to Google Drive.");
+      await sync.syncNow();
     } catch (error) {
-      Alert.alert("Backup failed", (error as Error).message);
+      Alert.alert("Sync failed", (error as Error).message);
     }
-  }, [cloud]);
+  }, [sync]);
 
   const onExport = useCallback(async () => {
     setBusy("export");
@@ -186,12 +158,7 @@ export default function BackupSyncScreen() {
       if (decisions === null) return; // user cancelled the review
 
       const result = await applyImportAsync(staged, analysis, decisions, setProgress);
-      Alert.alert(
-        "Import complete",
-        [restoredFromLine(analysis.manifest, null), ...summaryLines(result)]
-          .filter(Boolean)
-          .join("\n"),
-      );
+      Alert.alert("Import complete", summaryLines(result).join("\n"));
     } catch (error) {
       Alert.alert("Import failed", (error as Error).message);
     } finally {
@@ -201,119 +168,144 @@ export default function BackupSyncScreen() {
     }
   }, [showReviewAsync]);
 
-  const onRestore = useCallback(async () => {
-    try {
-      const result = await cloud.restoreFromCloud(showReviewAsync);
-      Alert.alert(
-        "Restore complete",
-        [restoredFromLine(result.manifest, result.modifiedTime), ...summaryLines(result)]
-          .filter(Boolean)
-          .join("\n"),
-      );
-    } catch (error) {
-      if (error instanceof ImportCancelledError) return; // user backed out of the review
-      if (error instanceof NoCloudBackupError) {
-        Alert.alert("No backup found", "This Google account has no DermaImageRecords backup yet.");
-        return;
-      }
-      Alert.alert("Restore failed", (error as Error).message);
+  const statusLine = (() => {
+    switch (sync.status) {
+      case "off":
+        return "Sync is off.";
+      case "syncing":
+        return "Syncing…";
+      case "needs-reauth":
+        return "Google access needed.";
+      case "error":
+        return sync.lastError ?? "Last sync failed.";
+      default:
+        return formatLastSync(sync.lastSyncAt);
     }
-  }, [cloud, showReviewAsync]);
+  })();
 
   return (
     <SafeAreaView edges={["bottom", "left", "right"]} className="flex-1 bg-slate-50 dark:bg-slate-950">
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
-        {/* Cloud backup */}
-        <Section
-          icon="cloud"
-          title="Cloud backup"
-          subtitle="Back up all records to your Google Drive. Only this app can see the backup file, and each backup replaces the previous one."
-        >
-          <SegmentedControl
-            options={MODE_OPTIONS}
-            value={cloud.mode}
-            onChange={cloud.setMode}
-            disabled={anyBusy}
-          />
-
-          {cloud.mode === "automatic" ? (
-            <View className="mt-4">
-              <Text className="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
-                How often
+        {/* Reconnect banner: sync can't reach Drive until the user re-consents. */}
+        {sync.status === "needs-reauth" ? (
+          <Pressable
+            onPress={() => void sync.reconnectGoogle()}
+            className="mb-4 flex-row items-center rounded-xl bg-amber-100 p-4 dark:bg-amber-900"
+            accessibilityRole="button"
+          >
+            <Feather name="alert-triangle" size={20} color={isDark ? "#fbbf24" : "#b45309"} />
+            <View className="ml-3 flex-1">
+              <Text className="text-sm font-semibold text-amber-900 dark:text-amber-100">
+                Reconnect Google to keep syncing
               </Text>
-              <View className="mt-2">
-                <ChipRow
-                  options={PERIOD_OPTIONS}
-                  value={cloud.periodKey}
-                  onChange={cloud.setPeriodKey}
-                  disabled={anyBusy}
-                />
-              </View>
-              {cloud.periodKey === "custom" ? (
-                <View className="mt-3">
-                  <Text className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                    {cloud.customDays === 1 ? "Every day" : `Every ${cloud.customDays} days`}
-                  </Text>
-                  <Slider
-                    style={{ marginTop: 4 }}
-                    minimumValue={BACKUP.minCustomDays}
-                    maximumValue={BACKUP.maxCustomDays}
-                    step={1}
-                    value={cloud.customDays}
-                    onValueChange={cloud.setCustomDays}
-                    disabled={anyBusy}
-                    minimumTrackTintColor={colors.accent}
-                    maximumTrackTintColor={colors.border}
-                    thumbTintColor={colors.iconStrong}
-                  />
-                </View>
-              ) : null}
-              <Text className="mt-2 text-xs text-slate-400 dark:text-slate-500">
-                Runs {periodLabel(cloud.periodKey, cloud.customDays).toLowerCase()} when you open
-                the app, if a backup is due.
+              <Text className="mt-0.5 text-xs text-amber-800 dark:text-amber-200">
+                {sync.lastError ?? "Google Drive access was lost."} Tap to sign in again.
               </Text>
             </View>
-          ) : null}
+          </Pressable>
+        ) : null}
 
-          {cloud.mode !== "off" ? (
+        {/* Sync */}
+        <Section
+          icon="refresh-cw"
+          title="Sync with Google Drive"
+          subtitle="Keeps this device and your other devices in step through a DermaImageRecords folder in your own Google Drive. Runs when you open the app and after you make changes."
+        >
+          <View className="flex-row items-center justify-between">
+            <Text className="text-base font-medium text-slate-900 dark:text-slate-100">
+              {sync.enabled ? "On" : "Off"}
+            </Text>
+            <Switch
+              value={sync.enabled}
+              onValueChange={sync.setEnabled}
+              disabled={!sync.ready || busy !== null}
+              trackColor={{ false: "#cbd5e1", true: "#475569" }}
+              thumbColor={sync.enabled ? "#e2e8f0" : "#f8fafc"}
+              ios_backgroundColor="#cbd5e1"
+            />
+          </View>
+
+          {sync.enabled ? (
             <>
               <Pressable
-                onPress={onBackupNow}
+                onPress={() => void onSyncNow()}
                 disabled={anyBusy}
                 className={`mt-4 h-12 flex-row items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 ${
                   anyBusy ? "opacity-50" : ""
                 }`}
               >
-                <Feather name="upload-cloud" size={18} color={isDark ? "#0f172a" : "#ffffff"} />
-                <Text className="ml-2 text-base font-semibold text-white dark:text-slate-900">
-                  Back up now
-                </Text>
+                {sync.status === "syncing" ? (
+                  <ActivityIndicator size="small" color={isDark ? "#0f172a" : "#ffffff"} />
+                ) : (
+                  <>
+                    <Feather name="refresh-cw" size={18} color={isDark ? "#0f172a" : "#ffffff"} />
+                    <Text className="ml-2 text-base font-semibold text-white dark:text-slate-900">
+                      Sync now
+                    </Text>
+                  </>
+                )}
               </Pressable>
-              <Text className="mt-2 text-xs text-slate-400 dark:text-slate-500">
-                {formatLastBackup(cloud.lastBackupAt)}
-              </Text>
-              {cloud.lastError ? (
+
+              <Text className="mt-2 text-xs text-slate-400 dark:text-slate-500">{statusLine}</Text>
+              {sync.lastError && sync.status === "error" ? (
                 <Text className="mt-1 text-xs text-rose-500 dark:text-rose-400">
-                  Last attempt failed: {cloud.lastError}
+                  {sync.lastError}
                 </Text>
               ) : null}
-              {retryNotice ? (
+
+              {sync.quota?.usedBytes != null ? (
                 <Text className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                  {retryNotice}
+                  Google Drive: {formatBytes(sync.quota.usedBytes)} used
+                  {sync.quota.limitBytes ? ` of ${formatBytes(sync.quota.limitBytes)}` : ""}.
                 </Text>
               ) : null}
             </>
-          ) : null}
+          ) : (
+            <Text className="mt-3 text-xs text-slate-400 dark:text-slate-500">
+              Turn on to mirror your records to a folder in your own Google Drive — nothing is
+              stored on our servers. On a new device, turning sync on downloads everything.
+            </Text>
+          )}
         </Section>
+
+        {/* Sync report */}
+        {sync.enabled && sync.report.length > 0 ? (
+          <Section
+            icon="activity"
+            title="Sync report"
+            subtitle="What the last syncs merged, renamed, or healed."
+          >
+            {sync.report.map((row) => {
+              const meta = LOG_ICONS[row.level];
+              const tint =
+                meta.tone === "error"
+                  ? colors.danger
+                  : meta.tone === "warn"
+                    ? (isDark ? "#fbbf24" : "#b45309")
+                    : colors.iconMuted;
+              return (
+                <View key={row.id} className="mb-3 flex-row items-start">
+                  <Feather name={meta.icon} size={14} color={tint} style={{ marginTop: 2 }} />
+                  <View className="ml-2 flex-1">
+                    <Text className="text-xs text-slate-700 dark:text-slate-200">{row.message}</Text>
+                    <Text className="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500">
+                      {new Date(row.at).toLocaleString()}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })}
+          </Section>
+        ) : null}
 
         {/* Export */}
         <Section
           icon="upload"
           title="Export"
-          subtitle="Save all patients, consultations, and photos to a single .zip you can back up or move to another device."
+          subtitle="Save all patients, consultations, and photos to a single .zip — a point-in-time archive you control. Sync mirrors the current state; an export is a backup."
         >
           <Pressable
-            onPress={onExport}
+            onPress={() => void onExport()}
             disabled={anyBusy}
             className={`h-12 flex-row items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 ${
               anyBusy ? "opacity-50" : ""
@@ -322,26 +314,6 @@ export default function BackupSyncScreen() {
             <Feather name="upload" size={18} color={isDark ? "#0f172a" : "#ffffff"} />
             <Text className="ml-2 text-base font-semibold text-white dark:text-slate-900">
               Export to .zip
-            </Text>
-          </Pressable>
-        </Section>
-
-        {/* Restore */}
-        <Section
-          icon="refresh-ccw"
-          title="Restore"
-          subtitle="Bring your records back from the latest backup in your Google Drive — useful on a new device, or after reinstalling."
-        >
-          <Pressable
-            onPress={() => void onRestore()}
-            disabled={anyBusy}
-            className={`h-12 flex-row items-center justify-center rounded-lg border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-800 ${
-              anyBusy ? "opacity-50" : ""
-            }`}
-          >
-            <Feather name="download-cloud" size={18} color={colors.iconStrong} />
-            <Text className="ml-2 text-base font-semibold text-slate-900 dark:text-slate-100">
-              Restore from Google Drive
             </Text>
           </Pressable>
         </Section>
@@ -369,18 +341,18 @@ export default function BackupSyncScreen() {
         <View className="mt-1 flex-row items-start">
           <Feather name="info" size={14} color={colors.iconMuted} style={{ marginTop: 2 }} />
           <Text className="ml-2 flex-1 text-xs text-slate-400 dark:text-slate-500">
-            Records are matched by their EMR number, so re-importing the same backup won&apos;t
-            create duplicates.
+            Records are matched by their EMR number and a hidden identity, so re-importing or
+            syncing the same records never creates duplicates.
           </Text>
         </View>
       </ScrollView>
 
-      {anyBusy && !review ? (
+      {busy !== null && !review ? (
         <View className="absolute inset-0 items-center justify-center bg-black/40">
           <View className="min-w-[220px] items-center rounded-2xl bg-white px-8 py-6 dark:bg-slate-900">
             <ActivityIndicator size="large" color={colors.accent} />
             <Text className="mt-3 text-center text-base font-medium text-slate-900 dark:text-slate-100">
-              {describeBackupProgress(cloud.busy ? cloud.progress : progress)}
+              {describeBackupProgress(progress)}
             </Text>
           </View>
         </View>

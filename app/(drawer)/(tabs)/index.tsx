@@ -254,10 +254,11 @@ export default function HomeScreen() {
           onEndReached={loadMore}
           onEndReachedThreshold={0.5}
           ListEmptyComponent={
-            <View className="items-center mt-20">
+            <View className="items-center mt-20 px-8">
               <Feather name="users" size={32} color={colors.iconMuted} />
-              <Text className="text-slate-500 mt-2 dark:text-slate-400">
-                No patients yet. Add one to get started.
+              <Text className="text-slate-500 mt-2 text-center dark:text-slate-400">
+                No patients yet. Add one to get started — or, if you have records on
+                another device, turn on sync under Backup &amp; Sync.
               </Text>
             </View>
           }

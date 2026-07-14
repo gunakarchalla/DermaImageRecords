@@ -23,7 +23,7 @@ import {
     writeJsonToDir,
 } from "../storage/fsUtils";
 import { generateEmrNumberAsync, readTakenEmrKeysAsync } from "../patient/emr";
-import { isTempFolderName } from "../storage/records";
+import { isTempFolderName, renamePhotoFileName } from "../storage/records";
 import {
     getExistingPatientDir,
     getPatientsRootDirectoryAsync,
@@ -419,17 +419,6 @@ const copyStagedFileAsync = async (source: File, destDir: Directory, name: strin
     dest.write(await source.bytes());
 };
 
-/** `<oldEmr>-<oldCid>-NN.ext` → `<newEmr>-<newCid>-NN.ext`; other names pass through. */
-const renamePhotoFile = (
-    name: string,
-    oldEmr: string,
-    oldCid: string,
-    newEmr: string,
-    newCid: string,
-): string => {
-    const prefix = `${oldEmr}-${oldCid}-`;
-    return name.startsWith(prefix) ? `${newEmr}-${newCid}-${name.slice(prefix.length)}` : name;
-};
 
 /**
  * Write one staged consultation into the live patient folder under `targetCid`, renaming
@@ -467,7 +456,7 @@ const writeConsultationFromStagingAsync = async (
         const source = stagedFiles.get(entry.file);
         if (!source) continue;
 
-        const newName = renamePhotoFile(entry.file, oldEmr, oldCid, targetEmr, targetCid);
+        const newName = renamePhotoFileName(entry.file, oldEmr, oldCid, targetEmr, targetCid);
         await copyStagedFileAsync(source, destDir, newName);
         usedNames.add(entry.file);
 
@@ -476,7 +465,7 @@ const writeConsultationFromStagingAsync = async (
             const thumbName = entry.thumb.split("/").pop() ?? "";
             const stagedThumb = stagedThumbs.get(thumbName);
             if (stagedThumb) {
-                const newThumbName = renamePhotoFile(thumbName, oldEmr, oldCid, targetEmr, targetCid);
+                const newThumbName = renamePhotoFileName(thumbName, oldEmr, oldCid, targetEmr, targetCid);
                 const thumbsDir = await getOrCreateChildDirectoryAsync(
                     destDir,
                     STORAGE.thumbsFolderName,
@@ -493,7 +482,7 @@ const writeConsultationFromStagingAsync = async (
     for (const [name, source] of stagedFiles) {
         if (usedNames.has(name)) continue;
         if (name.toLowerCase().endsWith(".json")) continue;
-        const newName = renamePhotoFile(name, oldEmr, oldCid, targetEmr, targetCid);
+        const newName = renamePhotoFileName(name, oldEmr, oldCid, targetEmr, targetCid);
         await copyStagedFileAsync(source, destDir, newName);
         photos.push({
             uid: `${record.uid}-recovered-${photos.length}`,

@@ -20,6 +20,7 @@ import { bumpDatasetRevision } from "../datasetRevision";
 import { consultationIndexService } from "../indexing/consultationIndexService";
 import { patientIndexService } from "../indexing/patientIndexService";
 import { EmrNumberTakenError, requireValidEmrNumber } from "../patient/emr";
+import { syncDb } from "../sync/syncDb";
 import { folderNameKey } from "./folderNames";
 import {
     findChildDirectory,
@@ -187,6 +188,15 @@ export const deletePatient = async (patientId: string) => {
     // If the folder is missing (deleted externally), treat it as already deleted on disk.
     // The filesystem is the source-of-truth; the SQLite DB is rebuildable cache/index.
     if (dir) {
+        // Announce the deletion to other devices before the uid becomes unreadable.
+        const record = await readPatientRecordAsync(dir);
+        if (record) {
+            await syncDb.recordTombstoneAsync(
+                `${STORAGE.patientsFolderName}/${patientId}`,
+                "patient",
+                record.uid,
+            );
+        }
         await safeDeleteDir(dir);
     }
 
@@ -314,6 +324,14 @@ export const deleteConsultation = async (patientId: string, consultationId: stri
 
     const dir = getExistingConsultationDir(patientId, consultationId);
     if (dir) {
+        const record = await readConsultationRecordAsync(dir);
+        if (record) {
+            await syncDb.recordTombstoneAsync(
+                `${STORAGE.patientsFolderName}/${patientId}/${STORAGE.consultationsFolderName}/${consultationId}`,
+                "consultation",
+                record.uid,
+            );
+        }
         await safeDeleteDir(dir);
     }
 
@@ -416,14 +434,29 @@ export const saveConsultation = async (
     const thumbsDir = findChildDirectory(dir, STORAGE.thumbsFolderName);
     const thumbFilesByName = thumbsDir ? listFilesByName(thumbsDir) : null;
 
-    // Delete files (and their thumbs) the user removed.
+    // Delete files (and their thumbs) the user removed, announcing each to other devices.
+    const consultationRelPath = `${STORAGE.patientsFolderName}/${patientId}/${STORAGE.consultationsFolderName}/${cid}`;
     for (const [uri, kept] of entryByUri) {
         if (incomingSet.has(uri)) continue;
+
+        await syncDb.recordTombstoneAsync(
+            `${consultationRelPath}/${kept.entry.file}`,
+            "photo",
+            kept.entry.uid,
+        );
         await safeDeleteFile(uri);
+
         if (kept.entry.thumb) {
             const thumbName = kept.entry.thumb.split("/").pop();
             const thumbFile = thumbName ? thumbFilesByName?.get(thumbName) : null;
-            if (thumbFile) await safeDeleteFile(thumbFile);
+            if (thumbFile) {
+                await syncDb.recordTombstoneAsync(
+                    `${consultationRelPath}/${kept.entry.thumb}`,
+                    "photo",
+                    kept.entry.uid,
+                );
+                await safeDeleteFile(thumbFile);
+            }
         }
     }
 

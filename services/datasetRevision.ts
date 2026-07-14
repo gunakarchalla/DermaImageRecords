@@ -18,14 +18,15 @@ export const bumpDatasetRevision = (): void => {
     for (const listener of listeners) listener();
 };
 
-const subscribe = (listener: () => void): (() => void) => {
+/** Plain subscription for non-React consumers (the sync trigger). */
+export const subscribeDatasetRevision = (listener: () => void): (() => void) => {
     listeners.add(listener);
     return () => {
         listeners.delete(listener);
     };
 };
 
-const getSnapshot = (): number => revision;
+export const getDatasetRevision = (): number => revision;
 
 export const useDatasetRevision = (): number =>
-    useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    useSyncExternalStore(subscribeDatasetRevision, getDatasetRevision, getDatasetRevision);

@@ -5,7 +5,7 @@ import { strToU8, Zip, ZipPassThrough } from "fflate";
 import { STORAGE } from "../../constants/storage";
 import { listEntriesSafe } from "../storage/fsUtils";
 import { getDatasetRootDirectoryAsync, initStorageAsync } from "../storage/roots";
-import { getCurrentAccountEmail } from "./googleDrive";
+import { getCurrentAccountEmail } from "../sync/driveClient";
 import { buildManifest, MANIFEST_FILE_NAME } from "./manifest";
 import {
     EmptyDatasetError,

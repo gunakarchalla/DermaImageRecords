@@ -2,7 +2,7 @@ import { useColorScheme } from "nativewind";
 import { useState } from "react";
 import { FlatList, Modal, Pressable, Text, View } from "react-native";
 
-import type { ArchivePlanEntry, ImportDecision } from "../services/backup/backupService";
+import type { ArchivePlanEntry, ImportDecision } from "../services/backup/zipImport";
 import { formatEmrNumberForDisplay } from "../services/patient/emr";
 
 // Active/inactive styling is applied via inline `style`, not by toggling Tailwind classes —

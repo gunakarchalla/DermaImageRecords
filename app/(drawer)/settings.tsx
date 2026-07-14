@@ -25,8 +25,8 @@ import {
   getCurrentStorageRootUriAsync,
   prettyStoragePath,
   supportsFolderSelection,
-  wipeAllDataAsync,
 } from "../../services/storage/storageLocation";
+import { wipeDeviceOnlyAsync, wipeEverywhereAsync } from "../../services/sync/wipe";
 
 const IMAGE_FORMAT_OPTIONS = IMAGE_FORMAT_KEYS.map((format) => ({
   value: format,
@@ -166,34 +166,61 @@ export default function SettingsScreen() {
     }
   }, [canSelectFolder]);
 
+  const runWipe = useCallback(async (everywhere: boolean) => {
+    setWiping(true);
+    try {
+      if (everywhere) {
+        await wipeEverywhereAsync();
+      } else {
+        await wipeDeviceOnlyAsync();
+      }
+      setRootUri(null);
+      Alert.alert(
+        "Data wiped",
+        everywhere
+          ? "All records were deleted here and in your Google Drive. Other synced devices will remove them on their next sync."
+          : "All records on this device were deleted. Your Google Drive and other devices were not touched.",
+      );
+    } catch (error) {
+      Alert.alert("Wipe failed", (error as Error).message);
+    } finally {
+      setWiping(false);
+    }
+  }, []);
+
   const onWipeData = useCallback(() => {
     Alert.alert(
       "Wipe all data?",
-      "This permanently deletes every patient and consultation, including photos, and forgets the selected storage folder. This cannot be undone.",
+      "This permanently deletes every patient and consultation, including photos. Choose how far the wipe should go.",
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Wipe data",
+          text: "This device only",
           style: "destructive",
-          onPress: async () => {
-            setWiping(true);
-            try {
-              await wipeAllDataAsync();
-              setRootUri(null);
-              Alert.alert(
-                "Data wiped",
-                "All records have been deleted. You'll be asked to pick a storage folder next time you add data.",
-              );
-            } catch (error) {
-              Alert.alert("Wipe failed", (error as Error).message);
-            } finally {
-              setWiping(false);
-            }
+          onPress: () => void runWipe(false),
+        },
+        {
+          text: "Everywhere",
+          style: "destructive",
+          onPress: () => {
+            // A second, scarier confirmation: this reaches Drive and every synced device.
+            Alert.alert(
+              "Wipe everywhere?",
+              "This also deletes the records from your Google Drive, and every synced device will remove them on its next sync. This cannot be undone.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Wipe everywhere",
+                  style: "destructive",
+                  onPress: () => void runWipe(true),
+                },
+              ],
+            );
           },
         },
       ],
     );
-  }, []);
+  }, [runWipe]);
 
   return (
     <SafeAreaView edges={["bottom", "left", "right"]} className="flex-1 bg-slate-50 dark:bg-slate-950">

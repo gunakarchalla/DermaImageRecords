@@ -117,3 +117,19 @@ export const readConsultationAsync = async (dir: Directory): Promise<Consultatio
  * in EMRs/CIDs precisely so these can never collide with a real record.
  */
 export const isTempFolderName = (name: string): boolean => name.includes("~");
+
+/**
+ * `<oldEmr>-<oldCid>-NN.ext` → `<newEmr>-<newCid>-NN.ext`; names that don't follow the
+ * scheme pass through unchanged. Used wherever a consultation or patient is renamed
+ * (import CID collisions, sync renumbering) so photo file names stay self-describing.
+ */
+export const renamePhotoFileName = (
+    name: string,
+    oldEmr: string,
+    oldCid: string,
+    newEmr: string,
+    newCid: string,
+): string => {
+    const prefix = `${oldEmr}-${oldCid}-`;
+    return name.startsWith(prefix) ? `${newEmr}-${newCid}-${name.slice(prefix.length)}` : name;
+};

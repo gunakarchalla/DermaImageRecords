@@ -1,4 +1,4 @@
-import { DriveAccessError } from "./googleDrive";
+import { DriveAccessError } from "../sync/driveClient";
 
 /** Shared progress/error vocabulary for export, import, cloud backup, and restore. */
 
@@ -78,7 +78,7 @@ export class ImportCancelledError extends Error {
 
 /**
  * Whether repeating a failed backup unattended could plausibly succeed. Drives the automatic
- * retry backoff in ./BackupProvider — errors that need the user (sign in again, grant Drive
+ * retry backoff in services/sync/SyncProvider — errors that need the user (sign in again, grant Drive
  * consent) or that can't change on their own (nothing to back up) must not spin on a timer.
  * Unrecognised failures (a dropped connection, a transient filesystem error) are worth a retry.
  */
