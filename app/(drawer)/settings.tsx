@@ -1,5 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import Slider from "@react-native-community/slider";
+import * as LocalAuthentication from "expo-local-authentication";
 import { useFocusEffect } from "expo-router";
 import { useColorScheme } from "nativewind";
 import { useCallback, useState } from "react";
@@ -19,6 +20,7 @@ import {
   describeImageSettings,
 } from "../../constants/preferences";
 import { useThemeColors } from "../../hooks/useThemeColors";
+import { canUseAppLockAsync } from "../../services/lock/LockGate";
 import { useSettings } from "../../services/preferences/SettingsProvider";
 import {
   changeStorageFolderAsync,
@@ -108,7 +110,32 @@ export default function SettingsScreen() {
     imagePresetKey,
     setImageSettings,
     applyImagePreset,
+    appLock,
+    setAppLock,
   } = useSettings();
+
+  const onToggleAppLock = useCallback(
+    async (next: boolean) => {
+      if (!next) {
+        setAppLock(false);
+        return;
+      }
+      // Never enable a lock the user can't open: the device must have some security
+      // enrolled, and the user must pass it once right now.
+      if (!(await canUseAppLockAsync())) {
+        Alert.alert(
+          "No screen lock set up",
+          "Set up a fingerprint, face unlock, or PIN in your device settings first.",
+        );
+        return;
+      }
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: "Confirm to enable app lock",
+      });
+      if (result.success) setAppLock(true);
+    },
+    [setAppLock],
+  );
 
   const [rootUri, setRootUri] = useState<string | null>(null);
   const [changingFolder, setChangingFolder] = useState(false);
@@ -400,7 +427,30 @@ export default function SettingsScreen() {
           ) : null}
         </Section>
 
-        {/* 4. Change Folder */}
+        {/* 4. App lock */}
+        <Section
+          icon="lock"
+          title="App lock"
+          subtitle="Require your fingerprint, face, or device PIN when opening the app."
+        >
+          <View className="flex-row items-center justify-between">
+            <Text className="text-base font-medium text-slate-900 dark:text-slate-100">
+              {appLock ? "On" : "Off"}
+            </Text>
+            <Switch
+              value={appLock}
+              onValueChange={(next) => void onToggleAppLock(next)}
+              trackColor={{ false: "#cbd5e1", true: "#475569" }}
+              thumbColor={appLock ? "#e2e8f0" : "#f8fafc"}
+              ios_backgroundColor="#cbd5e1"
+            />
+          </View>
+          <Text className="mt-2 text-xs text-slate-400 dark:text-slate-500">
+            Also locks when you come back after more than 30 seconds away.
+          </Text>
+        </Section>
+
+        {/* 5. Change Folder */}
         <Section
           icon="folder"
           title="Change Folder"
@@ -439,7 +489,7 @@ export default function SettingsScreen() {
           ) : null}
         </Section>
 
-        {/* 5. Wipe Data */}
+        {/* 6. Wipe Data */}
         <Section
           icon="trash-2"
           title="Wipe Data"

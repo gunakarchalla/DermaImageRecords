@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { ClinicProfileSection } from "../../features/clinic/ClinicProfileSection";
 import { useThemeColors } from "../../hooks/useThemeColors";
 import { useAuth } from "../../services/auth/AuthProvider";
 
@@ -62,6 +63,8 @@ export default function AccountScreen() {
             <Text className="mt-1 text-sm text-slate-500 dark:text-slate-400">{email}</Text>
           ) : null}
         </View>
+
+        <ClinicProfileSection />
 
         <Pressable
           onPress={onSignOut}

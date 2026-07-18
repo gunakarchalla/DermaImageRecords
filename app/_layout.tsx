@@ -7,6 +7,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { useThemeColors } from "../hooks/useThemeColors";
 import { AuthProvider, useAuth } from "../services/auth/AuthProvider";
+import { LockGate } from "../services/lock/LockGate";
 import { SettingsProvider } from "../services/preferences/SettingsProvider";
 import { sweepTempFilesAsync } from "../services/storage/tempSweep";
 import { SyncProvider } from "../services/sync/SyncProvider";
@@ -102,7 +103,10 @@ export default function RootLayout() {
         <AuthProvider>
           <SettingsProvider>
             <SyncProvider>
-              <RootNavigator />
+              {/* The lock overlay covers navigation, so locked = nothing visible. */}
+              <LockGate>
+                <RootNavigator />
+              </LockGate>
             </SyncProvider>
           </SettingsProvider>
         </AuthProvider>

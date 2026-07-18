@@ -38,20 +38,38 @@ const collectFiles = (dir: Directory, prefix: string, out: WalkedFile[]) => {
 };
 
 /**
- * Which files belong in the archive. `patientIds` limits the export to those patients
- * (selective export); dataset-root files (clinic profile, once it exists) are always
- * included so a partial archive still renders complete reports on the other side.
+ * Which files belong in the archive. `patientIds` limits the export to those patients;
+ * `consultations` narrows further to chosen visits of ONE patient (their patient.json and
+ * profile photos ride along so the record stays importable). Dataset-root files (the
+ * clinic profile) are always included so a partial archive still renders complete
+ * reports on the other side.
  */
 export type ExportFilter = {
     patientIds?: ReadonlySet<string>;
+    consultations?: { patientId: string; cids: ReadonlySet<string> };
 };
 
-const passesFilter = (relPath: string, filter?: ExportFilter): boolean => {
-    if (!filter?.patientIds) return true;
+/** Exported for tests: pure relPath predicate for the filter above. */
+export const passesFilter = (relPath: string, filter?: ExportFilter): boolean => {
+    if (!filter?.patientIds && !filter?.consultations) return true;
+
     const parts = relPath.split("/");
     const patientsIdx = parts.indexOf(STORAGE.patientsFolderName);
     if (patientsIdx === -1 || parts.length <= patientsIdx + 1) return true; // root-level file
-    return filter.patientIds.has(parts[patientsIdx + 1]);
+
+    const patientId = parts[patientsIdx + 1];
+
+    if (filter.consultations) {
+        if (patientId !== filter.consultations.patientId) return false;
+        // The patient's own files (patient.json, profile photos, thumbs) always ride along.
+        const sub = parts[patientsIdx + 2];
+        if (sub !== STORAGE.consultationsFolderName) return true;
+        const cid = parts[patientsIdx + 3];
+        if (!cid) return true; // the consultations folder itself
+        return filter.consultations.cids.has(cid);
+    }
+
+    return filter.patientIds!.has(patientId);
 };
 
 const backupTimestamp = (): string => {

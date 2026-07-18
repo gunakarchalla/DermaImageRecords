@@ -17,9 +17,13 @@ import { FlashList } from "@shopify/flash-list";
 import { useColorScheme } from "nativewind";
 
 import { GenderPicker } from "../../../components/ui/GenderPicker";
+import { ExportSelectSheet, type SelectItem } from "../../../features/export/ExportSelectSheet";
+import { sharePatientReportAsync } from "../../../features/pdf/shareReport";
 import { useDatasetFocusRefresh } from "../../../hooks/useDatasetFocusRefresh";
 import { useResolvedImageUri } from "../../../hooks/useResolvedImageUri";
 import { useThemeColors } from "../../../hooks/useThemeColors";
+import { describeBackupProgress, type BackupProgress } from "../../../services/backup/progress";
+import { exportDatasetAsync } from "../../../services/backup/zipExport";
 import type { ConsultationCursor } from "../../../services/db/dermaDb";
 import { consultationIndexService } from "../../../services/indexing/consultationIndexService";
 import { formatEmrNumberForDisplay } from "../../../services/patient/emr";
@@ -214,6 +218,106 @@ export default function PatientDetailsScreen() {
   // Load on first focus; reload only when the dataset changed (saves, deletes, imports).
   useDatasetFocusRefresh(loadData);
 
+  // ---- share / selective export ----
+  const [sheet, setSheet] = useState<{ mode: "export" | "pdf"; items: SelectItem[] } | null>(null);
+  const [working, setWorking] = useState<BackupProgress | null | false>(false);
+
+  /** Every consultation of this patient (the list state only holds the first page). */
+  const loadAllConsultationRows = useCallback(async () => {
+    const all: ConsultationIndexRow[] = [];
+    let cursor: ConsultationCursor | undefined;
+    do {
+      const page = await consultationIndexService.queryConsultationsPageAsync({
+        patientId: patientId as string,
+        limit: 100,
+        cursor,
+      });
+      all.push(...page.items);
+      cursor = page.nextCursor;
+    } while (cursor && all.length < 2000);
+    return all;
+  }, [patientId]);
+
+  const openSelectSheet = useCallback(
+    async (mode: "export" | "pdf") => {
+      try {
+        const rows = await loadAllConsultationRows();
+        if (rows.length === 0) {
+          Alert.alert("No consultations", "This patient has no consultations yet.");
+          return;
+        }
+        setSheet({
+          mode,
+          items: rows.map((row) => ({
+            key: row.id,
+            label: `Consultation ${row.id}`,
+            sublabel: `${new Date(row.createdAt).toLocaleDateString()} · ${
+              row.remarks ? row.remarks.slice(0, 60) : "No remarks"
+            }`,
+          })),
+        });
+      } catch (error) {
+        Alert.alert("Couldn't load consultations", (error as Error).message);
+      }
+    },
+    [loadAllConsultationRows],
+  );
+
+  const exportWholePatient = useCallback(async () => {
+    setWorking(null);
+    try {
+      await exportDatasetAsync((p) => setWorking(p), {
+        patientIds: new Set([patientId as string]),
+      });
+    } catch (error) {
+      Alert.alert("Export failed", (error as Error).message);
+    } finally {
+      setWorking(false);
+    }
+  }, [patientId]);
+
+  const onSheetConfirm = useCallback(
+    async (keys: string[]) => {
+      const mode = sheet?.mode;
+      setSheet(null);
+      if (!mode) return;
+
+      setWorking(null);
+      try {
+        if (mode === "export") {
+          await exportDatasetAsync((p) => setWorking(p), {
+            consultations: { patientId: patientId as string, cids: new Set(keys) },
+          });
+        } else {
+          await sharePatientReportAsync(patientId as string, keys);
+        }
+      } catch (error) {
+        Alert.alert(
+          mode === "export" ? "Export failed" : "Couldn't create the PDF",
+          (error as Error).message,
+        );
+      } finally {
+        setWorking(false);
+      }
+    },
+    [patientId, sheet],
+  );
+
+  const onShareMenu = useCallback(() => {
+    Alert.alert("Share / export", patient?.name ?? "", [
+      { text: "Export patient (.zip)", onPress: () => void exportWholePatient() },
+      {
+        text: "Export selected consultations…",
+        onPress: () => void openSelectSheet("export"),
+      },
+      {
+        text: "Patient summary PDF…",
+        onPress: () => void openSelectSheet("pdf"),
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  }, [exportWholePatient, openSelectSheet, patient?.name]);
+
   const requestPhoto = async (fromCamera: boolean) => {
     const permission = fromCamera
       ? await ImagePicker.requestCameraPermissionsAsync()
@@ -344,6 +448,13 @@ export default function PatientDetailsScreen() {
               Last updated {new Date(patient.updatedAt).toLocaleString()}
             </Text>
           </View>
+          <Pressable
+            onPress={onShareMenu}
+            className="p-2"
+            accessibilityLabel="Share or export this patient"
+          >
+            <Feather name="share-2" size={20} color={colors.iconStrong} />
+          </Pressable>
           <Pressable
             onPress={() => setEditing((prev) => !prev)}
             className="p-2"
@@ -510,6 +621,32 @@ export default function PatientDetailsScreen() {
           ) : null
         }
       />
+
+      {working !== false ? (
+        <View className="absolute inset-0 items-center justify-center bg-black/40">
+          <View className="min-w-[220px] items-center rounded-2xl bg-white px-8 py-6 dark:bg-slate-900">
+            <ActivityIndicator size="large" color={colors.accent} />
+            <Text className="mt-3 text-center text-base font-medium text-slate-900 dark:text-slate-100">
+              {working ? describeBackupProgress(working) : "Preparing…"}
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
+      {sheet ? (
+        <ExportSelectSheet
+          title={sheet.mode === "export" ? "Export consultations" : "Patient summary PDF"}
+          subtitle={
+            sheet.mode === "export"
+              ? "Choose the visits to include in the .zip."
+              : "Choose the visits to include in the report."
+          }
+          items={sheet.items}
+          confirmLabel={sheet.mode === "export" ? "Export" : "Create PDF"}
+          onCancel={() => setSheet(null)}
+          onConfirm={(keys) => void onSheetConfirm(keys)}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }

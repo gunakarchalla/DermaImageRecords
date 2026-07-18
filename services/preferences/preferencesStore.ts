@@ -10,6 +10,8 @@ export type StoredPreferences = {
     theme: ThemePreference;
     fontStep: number;
     image: ImageSettings;
+    /** Require biometric/device-credential unlock on open and on return to the app. */
+    appLock: boolean;
 };
 
 const PREFERENCES_FILE = new File(Paths.document, PREFERENCES.fileName);

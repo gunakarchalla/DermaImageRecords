@@ -5,6 +5,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   Text,
   useWindowDimensions,
@@ -12,6 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { sharePatientReportAsync } from "../../../../features/pdf/shareReport";
 import { useDatasetFocusRefresh } from "../../../../hooks/useDatasetFocusRefresh";
 import { useResolvedPhotoUris } from "../../../../hooks/useResolvedImageUri";
 import { useThemeColors } from "../../../../hooks/useThemeColors";
@@ -36,6 +38,19 @@ export default function ViewConsultationScreen() {
   // Derived display ordinal (position over createdAt); the stored consultation has no number.
   const [number, setNumber] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sharingPdf, setSharingPdf] = useState(false);
+
+  const onSharePdf = useCallback(async () => {
+    if (!patientId || !consultationId) return;
+    setSharingPdf(true);
+    try {
+      await sharePatientReportAsync(patientId, [consultationId]);
+    } catch (error) {
+      Alert.alert("Couldn't create the PDF", (error as Error).message);
+    } finally {
+      setSharingPdf(false);
+    }
+  }, [consultationId, patientId]);
 
   // Grid tiles render thumbnails when present (full image as fallback), resolved from
   // persisted SAF/content URIs to cache file:// URIs.
@@ -107,9 +122,22 @@ export default function ViewConsultationScreen() {
   const header = (
     <View>
       <View className="flex-row items-center justify-between mb-1">
-        <Text className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+        <Text className="flex-1 text-2xl font-bold text-slate-900 dark:text-slate-100">
           Consultation {consultation.cid}
         </Text>
+        <Pressable
+          onPress={() => void onSharePdf()}
+          disabled={sharingPdf}
+          className="p-2"
+          accessibilityLabel="Share as PDF"
+          style={{ opacity: sharingPdf ? 0.4 : 1 }}
+        >
+          {sharingPdf ? (
+            <ActivityIndicator size="small" color={colors.iconStrong} />
+          ) : (
+            <Feather name="share-2" size={20} color={colors.iconStrong} />
+          )}
+        </Pressable>
         <Pressable
           onPress={() =>
             router.push(

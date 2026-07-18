@@ -36,11 +36,14 @@ type SettingsContextValue = {
     imageSettings: ImageSettings;
     /** The preset `imageSettings` matches, or `null` when the user has customised them. */
     imagePresetKey: ImagePresetKey | null;
+    /** Whether the app requires biometric/device unlock (see services/lock/LockGate). */
+    appLock: boolean;
     setTheme: (theme: ThemePreference) => void;
     toggleTheme: () => void;
     setFontStep: (step: number) => void;
     setImageSettings: (settings: ImageSettings) => void;
     applyImagePreset: (key: ImagePresetKey) => void;
+    setAppLock: (enabled: boolean) => void;
 };
 
 const SettingsContext = createContext<SettingsContextValue | null>(null);
@@ -49,6 +52,7 @@ const DEFAULT_PREFERENCES: StoredPreferences = {
     theme: PREFERENCES.defaultTheme,
     fontStep: PREFERENCES.defaultFontStep,
     image: DEFAULT_IMAGE_SETTINGS,
+    appLock: false,
 };
 
 const applyTheme = (theme: ThemePreference) => {
@@ -74,6 +78,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
                 theme: stored.theme ?? PREFERENCES.defaultTheme,
                 fontStep: clampFontStep(stored.fontStep ?? PREFERENCES.defaultFontStep),
                 image: normalizeImageSettings(stored.image),
+                appLock: stored.appLock === true,
             };
 
             applyTheme(next.theme);
@@ -136,6 +141,13 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         [setImageSettings],
     );
 
+    const setAppLock = useCallback(
+        (enabled: boolean) => {
+            update({ appLock: enabled });
+        },
+        [update],
+    );
+
     const value = useMemo<SettingsContextValue>(
         () => ({
             ready,
@@ -144,13 +156,15 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
             fontScale: fontScaleForStep(prefs.fontStep),
             imageSettings: prefs.image,
             imagePresetKey: matchImagePreset(prefs.image),
+            appLock: prefs.appLock,
             setTheme,
             toggleTheme,
             setFontStep,
             setImageSettings,
             applyImagePreset,
+            setAppLock,
         }),
-        [ready, prefs, setTheme, toggleTheme, setFontStep, setImageSettings, applyImagePreset],
+        [ready, prefs, setTheme, toggleTheme, setFontStep, setImageSettings, applyImagePreset, setAppLock],
     );
 
     return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;

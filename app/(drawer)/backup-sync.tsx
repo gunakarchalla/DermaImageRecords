@@ -7,12 +7,15 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ConflictReviewSheet } from "../../components/ConflictReviewSheet";
 import { Section } from "../../components/ui/Section";
+import { ExportSelectSheet, type SelectItem } from "../../features/export/ExportSelectSheet";
 import { useThemeColors } from "../../hooks/useThemeColors";
 import {
   describeBackupProgress,
   type BackupProgress,
 } from "../../services/backup/progress";
-import { exportDatasetAsync } from "../../services/backup/zipExport";
+import { exportDatasetAsync, type ExportFilter } from "../../services/backup/zipExport";
+import { patientIndexService } from "../../services/indexing/patientIndexService";
+import { formatEmrNumberForDisplay } from "../../services/patient/emr";
 import {
   analyzeArchiveEntriesAsync,
   applyImportAsync,
@@ -121,16 +124,50 @@ export default function BackupSyncScreen() {
     }
   }, [sync]);
 
-  const onExport = useCallback(async () => {
+  const [patientSheet, setPatientSheet] = useState<SelectItem[] | null>(null);
+
+  const onExport = useCallback(async (filter?: ExportFilter) => {
     setBusy("export");
     setProgress(null);
     try {
-      await exportDatasetAsync(setProgress);
+      await exportDatasetAsync(setProgress, filter);
     } catch (error) {
       Alert.alert("Export failed", (error as Error).message);
     } finally {
       setBusy(null);
       setProgress(null);
+    }
+  }, []);
+
+  const onPickPatientsToExport = useCallback(async () => {
+    try {
+      // Drain the paginated index into one selection list.
+      const items: SelectItem[] = [];
+      let cursor: Awaited<ReturnType<typeof patientIndexService.queryPatientsPageAsync>>["nextCursor"];
+      do {
+        const page = await patientIndexService.queryPatientsPageAsync({
+          limit: 200,
+          sortField: "name",
+          sortDirection: "asc",
+          cursor,
+        });
+        items.push(
+          ...page.items.map((p) => ({
+            key: p.id,
+            label: p.name,
+            sublabel: `EMR ${formatEmrNumberForDisplay(p.emrNumber)}`,
+          })),
+        );
+        cursor = page.nextCursor;
+      } while (cursor && items.length < 5000);
+
+      if (items.length === 0) {
+        Alert.alert("Nothing to export", "There are no patients yet.");
+        return;
+      }
+      setPatientSheet(items);
+    } catch (error) {
+      Alert.alert("Couldn't load patients", (error as Error).message);
     }
   }, []);
 
@@ -302,7 +339,7 @@ export default function BackupSyncScreen() {
         <Section
           icon="upload"
           title="Export"
-          subtitle="Save all patients, consultations, and photos to a single .zip — a point-in-time archive you control. Sync mirrors the current state; an export is a backup."
+          subtitle="Save patients, consultations, and photos to a .zip — a point-in-time archive you control. Sync mirrors the current state; an export is a backup."
         >
           <Pressable
             onPress={() => void onExport()}
@@ -313,7 +350,19 @@ export default function BackupSyncScreen() {
           >
             <Feather name="upload" size={18} color={isDark ? "#0f172a" : "#ffffff"} />
             <Text className="ml-2 text-base font-semibold text-white dark:text-slate-900">
-              Export to .zip
+              Export everything
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => void onPickPatientsToExport()}
+            disabled={anyBusy}
+            className={`mt-3 h-12 flex-row items-center justify-center rounded-lg border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-800 ${
+              anyBusy ? "opacity-50" : ""
+            }`}
+          >
+            <Feather name="check-square" size={18} color={colors.iconStrong} />
+            <Text className="ml-2 text-base font-semibold text-slate-900 dark:text-slate-100">
+              Export selected patients…
             </Text>
           </Pressable>
         </Section>
@@ -360,6 +409,20 @@ export default function BackupSyncScreen() {
 
       {review ? (
         <ConflictReviewSheet mismatches={review.mismatches} onResolve={finishReview} />
+      ) : null}
+
+      {patientSheet ? (
+        <ExportSelectSheet
+          title="Export patients"
+          subtitle="Choose the patients to include in the .zip."
+          items={patientSheet}
+          confirmLabel="Export"
+          onCancel={() => setPatientSheet(null)}
+          onConfirm={(keys) => {
+            setPatientSheet(null);
+            void onExport({ patientIds: new Set(keys) });
+          }}
+        />
       ) : null}
     </SafeAreaView>
   );

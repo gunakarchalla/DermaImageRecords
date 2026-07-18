@@ -31,12 +31,12 @@ export type EncodedImage = { uri: string; ext: string; mimeType: string };
 const THUMBNAIL_MAX_DIMENSION = 512;
 const THUMBNAIL_COMPRESS = 0.7;
 
-/**
- * Produce a small JPEG thumbnail of `sourceUri` for list rows, grids, and filmstrips.
- * Always JPEG regardless of the user's storage format — at 512px the quality difference
- * is invisible and JPEG encodes fastest on Android.
- */
-export const encodeThumbnailAsync = async (sourceUri: string): Promise<EncodedImage> => {
+const encodeCappedAsync = async (
+    sourceUri: string,
+    maxDimension: number,
+    format: SaveFormat,
+    compress: number,
+): Promise<{ uri: string }> => {
     const nativeRefs: { release: () => void }[] = [];
 
     try {
@@ -46,7 +46,7 @@ export const encodeThumbnailAsync = async (sourceUri: string): Promise<EncodedIm
         nativeRefs.push(decoded);
 
         let image: ImageRef = decoded;
-        const target = resizeTargetFor(decoded.width, decoded.height, THUMBNAIL_MAX_DIMENSION);
+        const target = resizeTargetFor(decoded.width, decoded.height, maxDimension);
         if (target) {
             const resizeContext = ImageManipulator.manipulate(decoded).resize(target);
             nativeRefs.push(resizeContext);
@@ -54,15 +54,34 @@ export const encodeThumbnailAsync = async (sourceUri: string): Promise<EncodedIm
             nativeRefs.push(image);
         }
 
-        const result = await image.saveAsync({
-            compress: THUMBNAIL_COMPRESS,
-            format: SaveFormat.JPEG,
-        });
-
-        return { uri: result.uri, ext: "jpg", mimeType: "image/jpeg" };
+        return await image.saveAsync({ compress, format });
     } finally {
         for (const ref of nativeRefs.reverse()) ref.release();
     }
+};
+
+/**
+ * Produce a small JPEG thumbnail of `sourceUri` for list rows, grids, and filmstrips.
+ * Always JPEG regardless of the user's storage format — at 512px the quality difference
+ * is invisible and JPEG encodes fastest on Android.
+ */
+export const encodeThumbnailAsync = async (sourceUri: string): Promise<EncodedImage> => {
+    const result = await encodeCappedAsync(
+        sourceUri,
+        THUMBNAIL_MAX_DIMENSION,
+        SaveFormat.JPEG,
+        THUMBNAIL_COMPRESS,
+    );
+    return { uri: result.uri, ext: "jpg", mimeType: "image/jpeg" };
+};
+
+/**
+ * Encode a clinic logo: capped like a thumbnail but saved as PNG, because logos are
+ * routinely transparent — JPEG has no alpha channel and would turn transparency black.
+ */
+export const encodeLogoAsync = async (sourceUri: string): Promise<EncodedImage> => {
+    const result = await encodeCappedAsync(sourceUri, THUMBNAIL_MAX_DIMENSION, SaveFormat.PNG, 1);
+    return { uri: result.uri, ext: "png", mimeType: "image/png" };
 };
 
 /**
