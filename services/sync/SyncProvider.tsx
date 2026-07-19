@@ -45,6 +45,7 @@ type SyncContextValue = {
     reconnectGoogle: () => Promise<void>;
     report: SyncLogRow[];
     refreshReport: () => Promise<void>;
+    clearReport: () => Promise<void>;
     quota: DriveQuota | null;
     refreshQuota: () => Promise<void>;
 };
@@ -104,6 +105,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
     const refreshReport = useCallback(async () => {
         setReport(await syncDb.readRecentLogAsync(30));
+    }, []);
+
+    const clearReport = useCallback(async () => {
+        await syncDb.clearLogAsync();
+        setReport([]);
     }, []);
 
     const refreshQuota = useCallback(async () => {
@@ -265,6 +271,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
             reconnectGoogle,
             report,
             refreshReport,
+            clearReport,
             quota,
             refreshQuota,
         }),
@@ -280,6 +287,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
             reconnectGoogle,
             report,
             refreshReport,
+            clearReport,
             quota,
             refreshQuota,
         ],

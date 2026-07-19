@@ -71,6 +71,18 @@ const formatLastSync = (iso: string | null): string => {
   })}`;
 };
 
+/** "just now" / "12 min ago" / "3 h ago" / a date, for the sync report rows. */
+const relativeTime = (iso: string): string => {
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return new Date(iso).toLocaleString();
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return new Date(iso).toLocaleDateString();
+};
+
 const LOG_ICONS: Record<SyncLogRow["level"], { icon: React.ComponentProps<typeof Feather>["name"]; tone: "muted" | "warn" | "error" }> = {
   info: { icon: "info", tone: "muted" },
   conflict: { icon: "git-merge", tone: "warn" },
@@ -326,12 +338,22 @@ export default function BackupSyncScreen() {
                   <View className="ml-2 flex-1">
                     <Text className="text-xs text-slate-700 dark:text-slate-200">{row.message}</Text>
                     <Text className="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500">
-                      {new Date(row.at).toLocaleString()}
+                      {relativeTime(row.at)}
                     </Text>
                   </View>
                 </View>
               );
             })}
+            <Pressable
+              onPress={() => void sync.clearReport()}
+              accessibilityRole="button"
+              className="mt-1 flex-row items-center self-start py-1"
+            >
+              <Feather name="trash-2" size={13} color={colors.iconMuted} />
+              <Text className="ml-1 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                Clear report
+              </Text>
+            </Pressable>
           </Section>
         ) : null}
 

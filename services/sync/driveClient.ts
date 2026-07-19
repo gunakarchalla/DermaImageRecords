@@ -367,6 +367,61 @@ export const renameFileAsync = async (
     });
 };
 
+/** The token marking "now" in the account's change feed, for later cheap probing. */
+export const getChangesStartTokenAsync = async (accessToken: string): Promise<string | null> => {
+    try {
+        const res = await driveFetchAsync(accessToken, "/drive/v3/changes/startPageToken", {
+            failMessage: "Couldn't read the Drive change token",
+        });
+        const json = (await res.json()) as { startPageToken?: string };
+        return json.startPageToken ?? null;
+    } catch {
+        // Purely an optimization; a missing token just means the next cycle lists fully.
+        return null;
+    }
+};
+
+/**
+ * Cheap "did anything change since `pageToken`?" probe (~one request). Returns null when
+ * the token has expired (HTTP 410) or the probe failed — the caller must then do a full
+ * listing and mint a fresh token.
+ */
+export const probeChangesSinceAsync = async (
+    accessToken: string,
+    pageToken: string,
+): Promise<{ changed: boolean; newStartPageToken: string | null } | null> => {
+    const params = new URLSearchParams({
+        pageToken,
+        pageSize: "1",
+        spaces: "drive",
+        fields: "newStartPageToken,nextPageToken,changes(fileId)",
+    });
+
+    let res: Response;
+    try {
+        res = await fetch(`https://www.googleapis.com/drive/v3/changes?${params.toString()}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+        });
+    } catch {
+        return null;
+    }
+    if (!res.ok) return null; // incl. 410 Gone: token expired
+
+    try {
+        const json = (await res.json()) as {
+            newStartPageToken?: string;
+            nextPageToken?: string;
+            changes?: unknown[];
+        };
+        return {
+            changed: Boolean(json.nextPageToken) || (json.changes?.length ?? 0) > 0,
+            newStartPageToken: json.newStartPageToken ?? null,
+        };
+    } catch {
+        return null;
+    }
+};
+
 export type DriveQuota = { usedBytes: number | null; limitBytes: number | null };
 
 /** The account's overall Drive storage quota, for the usage indicator. */

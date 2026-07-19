@@ -16,7 +16,12 @@ const FEATURES: { icon: FeatherName; text: string }[] = [
     icon: "layers",
     text: "Compare images across visits to track progression",
   },
-  { icon: "smartphone", text: "All records stay on your device" },
+  {
+    icon: "refresh-cw",
+    text: "Sync across your devices through your own Google Drive — no servers in between",
+  },
+  { icon: "file-text", text: "Share consultation reports as PDF, on your clinic's letterhead" },
+  { icon: "lock", text: "Records stay on your device, behind an optional app lock" },
 ];
 
 export default function AboutScreen() {

@@ -6,7 +6,7 @@ import { SYNC } from "../../constants/sync";
 import type { PersistedConsultation, PersistedPatient } from "../../types/models";
 import { mapWithConcurrency } from "../async";
 import { nextSequentialCid } from "../consultation/cid";
-import { bumpDatasetRevision } from "../datasetRevision";
+import { bumpDatasetRevision, getDatasetRevision } from "../datasetRevision";
 import { dermaDb } from "../db/dermaDb";
 import { consultationIndexService } from "../indexing/consultationIndexService";
 import { patientIndexService } from "../indexing/patientIndexService";
@@ -40,8 +40,10 @@ import {
     createTextFileAsync,
     downloadToFileAsync,
     ensureDriveAccessTokenAsync,
+    getChangesStartTokenAsync,
     isRemoteFolder,
     listAllFilesAsync,
+    probeChangesSinceAsync,
     readTextFileAsync,
     trashFileAsync,
     updateTextFileAsync,
@@ -101,6 +103,14 @@ const emptySummary = (): SyncSummary => ({
 
 let running = false;
 let lastFinishedAt = 0;
+
+/**
+ * The dataset revision as of the start of the last fully-clean cycle, or null when the
+ * next cycle must be a full one (errors, local changes applied, or first run since
+ * launch). Together with the Drive changes token this lets an idle trigger — app
+ * foregrounded, periodic timer — cost one probe request instead of a full listing.
+ */
+let cleanCycleRevision: number | null = null;
 
 export const isSyncRunning = () => running;
 export const getLastSyncFinishedAt = () => lastFinishedAt;
@@ -210,6 +220,23 @@ const runOneCycleAsync = async (): Promise<SyncSummary> => {
 
     const token = await ensureDriveAccessTokenAsync();
     await initStorageAsync();
+
+    // ---- fast skip: nothing changed on either side since the last clean cycle ----
+    const revisionAtStart = getDatasetRevision();
+    const changesToken = await syncDb.getMetaAsync("driveChangesToken");
+    if (changesToken && cleanCycleRevision === revisionAtStart) {
+        const tombstoneRows = await syncDb.readAllTombstonesAsync();
+        const hasUnpublished = tombstoneRows.some((t) => t.uploadedAt === null);
+        if (!hasUnpublished) {
+            const probe = await probeChangesSinceAsync(token, changesToken);
+            if (probe && !probe.changed) {
+                if (probe.newStartPageToken) {
+                    await syncDb.setMetaAsync("driveChangesToken", probe.newStartPageToken);
+                }
+                return emptySummary();
+            }
+        }
+    }
 
     // ---- remote root + tree ----
     const files = await listAllFilesAsync(token);
@@ -571,6 +598,18 @@ const runOneCycleAsync = async (): Promise<SyncSummary> => {
     }
 
     if (anyLocalChange) bumpDatasetRevision();
+
+    // Arm the fast skip only after a fully clean, change-free-locally cycle: any error
+    // or applied local change forces the next cycle to list fully. The token is minted
+    // AFTER our own uploads, so they don't read back as "remote changes".
+    if (summary.errors === 0 && !summary.structuralChange) {
+        const freshToken = await getChangesStartTokenAsync(token);
+        if (freshToken) await syncDb.setMetaAsync("driveChangesToken", freshToken);
+        cleanCycleRevision = anyLocalChange ? null : revisionAtStart;
+    } else {
+        cleanCycleRevision = null;
+    }
+
     return summary;
 };
 

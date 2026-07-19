@@ -267,6 +267,12 @@ export const syncDb = {
         );
     },
 
+    clearLogAsync: async () => {
+        await ensureSchemaAsync();
+        const db = await openDbAsync();
+        await db.runAsync("DELETE FROM sync_log");
+    },
+
     // ---- lifecycle ----
 
     /** Device-only wipe: forget everything, including the device identity. */

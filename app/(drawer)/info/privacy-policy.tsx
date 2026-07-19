@@ -13,8 +13,16 @@ const SECTIONS: { title: string; body: string }[] = [
     body: "If you choose to share it, we may collect analytical and diagnostic data — such as crash reports and usage statistics — to help us fix bugs and improve the app. This is optional and only collected with your consent.",
   },
   {
-    title: "Patient & consultation data stays on your device",
+    title: "Patient & consultation data stays with you",
     body: "All patient records, consultation notes, and clinical images you create are stored locally on your phone. This data never reaches us, and the creators of DermaImageRecords have no access to it.",
+  },
+  {
+    title: "Sync uses your own Google Drive",
+    body: "If you turn on sync, your records are mirrored to a DermaImageRecords folder in your own Google Drive account — never to our servers, because we don't have any. The app can only see files it created itself (Google's most limited Drive permission). Deleted records go to your Drive trash, where Google keeps them for about 30 days.",
+  },
+  {
+    title: "If you revoke the app's Drive access",
+    body: "Removing DermaImageRecords from your Google account's connected apps permanently cuts its access to the files it previously uploaded — even if you reconnect later. Your data is safe in Drive and on your devices; after reconnecting, the next sync uploads a fresh copy from any device that still holds the records.",
   },
   {
     title: "How we use information",
@@ -26,7 +34,7 @@ export default function PrivacyPolicyScreen() {
   return (
     <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950">
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
-        <Text className="text-sm text-slate-500 dark:text-slate-400">Last updated: 7 July 2026</Text>
+        <Text className="text-sm text-slate-500 dark:text-slate-400">Last updated: 19 July 2026</Text>
 
         <Text className="mt-3 text-base leading-6 text-slate-600 dark:text-slate-300">
           Your privacy — and your patients&apos; privacy — matters to us. This
