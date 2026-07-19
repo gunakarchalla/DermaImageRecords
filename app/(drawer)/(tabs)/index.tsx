@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   Alert,
   Pressable,
+  RefreshControl,
   Text,
   TextInput,
   View,
@@ -20,6 +21,7 @@ import { useColorScheme } from "nativewind";
 import { PatientListItem } from "../../../components/PatientListItem";
 import { ChipRow, type ChipOption } from "../../../components/ui/ChipRow";
 import { useDatasetFocusRefresh } from "../../../hooks/useDatasetFocusRefresh";
+import { useSyncRefresh } from "../../../hooks/useSyncRefresh";
 import { useThemeColors } from "../../../hooks/useThemeColors";
 import { patientIndexService } from "../../../services/indexing/patientIndexService";
 import { deletePatient } from "../../../services/storage/storage";
@@ -135,6 +137,9 @@ export default function HomeScreen() {
   // edits made on pushed screens). Navigating back with nothing changed reloads nothing.
   useDatasetFocusRefresh(loadFirstPage);
 
+  // Swipe down to run a sync (when on) and reload the list.
+  const { refreshing, onRefresh } = useSyncRefresh(loadFirstPage);
+
   // Search/sort changes reload explicitly (the refresh hook ignores `load` identity).
   const isFirstQueryRender = useRef(true);
   useEffect(() => {
@@ -238,7 +243,7 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {loading ? (
+      {loading && !refreshing ? (
         <View className="flex-1 items-center justify-center">
           <ActivityIndicator size="large" color={colors.accent} />
         </View>
@@ -251,6 +256,15 @@ export default function HomeScreen() {
             padding: 16,
             paddingBottom: listBottomPadding,
           }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.accent}
+              colors={[colors.accent]}
+              progressBackgroundColor={colors.surface}
+            />
+          }
           onEndReached={loadMore}
           onEndReachedThreshold={0.5}
           ListEmptyComponent={

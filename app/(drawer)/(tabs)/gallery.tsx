@@ -2,12 +2,20 @@ import { FlashList } from "@shopify/flash-list";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { memo, useCallback, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, View, useWindowDimensions } from "react-native";
+import {
+  ActivityIndicator,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { useDatasetFocusRefresh } from "../../../hooks/useDatasetFocusRefresh";
 import { useResolvedImageUri } from "../../../hooks/useResolvedImageUri";
+import { useSyncRefresh } from "../../../hooks/useSyncRefresh";
 import { useThemeColors } from "../../../hooks/useThemeColors";
 import type { PhotoCursor } from "../../../services/db/dermaDb";
 import { consultationIndexService } from "../../../services/indexing/consultationIndexService";
@@ -107,6 +115,9 @@ export default function GalleryScreen() {
 
   useDatasetFocusRefresh(loadFirstPage);
 
+  // Swipe down to run a sync (when on) and reload the grid.
+  const { refreshing, onRefresh } = useSyncRefresh(loadFirstPage);
+
   const openPhoto = useCallback(
     (item: PhotoIndexRow) => {
       router.push(
@@ -123,27 +134,45 @@ export default function GalleryScreen() {
     [cellSize, openPhoto],
   );
 
+  // Shared between the populated grid and the empty state so both are pullable — a fresh
+  // synced device lands on the empty gallery, exactly where pulling to sync matters most.
+  const refreshControlEl = (
+    <RefreshControl
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+      tintColor={colors.accent}
+      colors={[colors.accent]}
+      progressBackgroundColor={colors.surface}
+    />
+  );
+
   return (
     <SafeAreaView
       edges={["bottom", "left", "right"]}
       className="flex-1 bg-slate-50 dark:bg-slate-950"
     >
-      {loading ? (
+      {loading && !refreshing ? (
         <View className="flex-1 items-center justify-center">
           <ActivityIndicator size="large" color={colors.accent} />
         </View>
       ) : items.length === 0 ? (
-        <EmptyState
-          icon="image"
-          title="No photos yet"
-          message="Photos you take during consultations will appear here, newest first."
-        />
+        <ScrollView
+          contentContainerStyle={{ flexGrow: 1 }}
+          refreshControl={refreshControlEl}
+        >
+          <EmptyState
+            icon="image"
+            title="No photos yet"
+            message="Photos you take during consultations will appear here, newest first."
+          />
+        </ScrollView>
       ) : (
         <FlashList
           data={items}
           numColumns={COLUMNS}
           keyExtractor={(item) => `${item.patientId}/${item.consultationId}/${item.file}`}
           renderItem={renderItem}
+          refreshControl={refreshControlEl}
           onEndReached={loadMore}
           onEndReachedThreshold={0.5}
           contentContainerStyle={{ padding: CELL_GAP / 2 }}
